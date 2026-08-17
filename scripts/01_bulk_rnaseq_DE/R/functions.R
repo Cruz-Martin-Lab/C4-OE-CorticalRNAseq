@@ -142,13 +142,19 @@ flag_sex_linked_genes <- function(df, gene_col = "gene", sex_genes = SEX_LINKED_
 # -----------------------------------------------------------------------------
 
 lib_size_bar <- function(library_data) {
+  # Colour bars by genotype (keeps the whole analysis on one palette), matching
+  # each sample to its group via SAMPLE_METADATA without reordering the bars.
+  library_data$genotype_label <- display_genotype(
+    SAMPLE_METADATA$genotype[match(library_data$sample, SAMPLE_METADATA$sample)]
+  )
   library_data$sample <- display_sample(library_data$sample)
   library_data$sample <- factor(library_data$sample, levels = unique(library_data$sample))
-  ggplot(library_data, aes(x = sample, y = total_reads, fill = sample)) +
-    geom_bar(stat = "identity") +
+  ggplot(library_data, aes(x = sample, y = total_reads, fill = genotype_label)) +
+    geom_bar(stat = "identity", color = "black") +
+    scale_fill_manual(values = GENOTYPE_COLOURS, name = NULL) +
     labs(title = "Library Size per Sample", x = "Sample", y = "Number of Counts") +
     theme_bw() +
-    theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
 }
 
 plot_variance_vs_mean <- function(filtered_counts) {
@@ -283,6 +289,7 @@ plot_pca <- function(vst_matrix, metadata, color_by = "genotype_label", shape_by
                       color = .data[[color_by]], shape = .data[[shape_by]])) +
     geom_point(size = 3) +
     stat_ellipse(aes(group = .data[[color_by]]), linetype = "dashed") +
+    scale_color_manual(values = GENOTYPE_COLOURS) +
     labs(title = title, color = "Genotype", shape = "Sex",
          x = paste0("PC1: ", round(var_explained[1], 0), "% Variance"),
          y = paste0("PC2: ", round(var_explained[2], 0), "% Variance")) +
@@ -503,6 +510,7 @@ plot_heatmap_top_deg <- function(res_table, norm_counts, metadata, top_n = 50,
 
   pheatmap(mat,
     annotation_col = annotation_col,
+    annotation_colors = list(Genotype = GENOTYPE_COLOURS),
     show_rownames = TRUE, fontsize_row = 6,
     color = colorRampPalette(rev(brewer.pal(9, "RdBu")))(100),
     main = title, silent = TRUE
@@ -513,10 +521,10 @@ plot_heatmap_top_deg <- function(res_table, norm_counts, metadata, top_n = 50,
 # 5. GO over-representation analysis (ORA) -- WITH gene universe
 # -----------------------------------------------------------------------------
 
-#' clusterProfiler::enrichGO with an explicit universe (the fix for the
-#' original bug). `universe` should be every gene that was actually tested
-#' for DE (i.e. res_table$gene after filtering), not left as the
-#' clusterProfiler default (every annotated gene in org.Mm.eg.db).
+#' clusterProfiler::enrichGO with an explicit universe. `universe` should be
+#' every gene that was actually tested for DE (i.e. res_table$gene after
+#' filtering), not left as the clusterProfiler default (every annotated gene in
+#' org.Mm.eg.db), which would inflate enrichment significance.
 run_go_ora <- function(sig_genes, universe, ont = "BP") {
   clusterProfiler::enrichGO(
     gene          = sig_genes,

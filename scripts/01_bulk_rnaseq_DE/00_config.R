@@ -129,6 +129,11 @@ GENOTYPE_DISPLAY <- c(Control = "Control", C4_OE = "C4-OE")
 DESEQ_RESULT_NAME <- "genotype_C4_OE_vs_Control"
 CONTRAST_LABEL    <- "C4-OE vs Control"
 
+# Group fill/point colours, keyed by DISPLAY label. Every genotype-coloured plot
+# in the pipeline (and Figures_paper.R) reads from here, so changing these two
+# values recolours the whole analysis consistently.
+GENOTYPE_COLOURS <- c("Control" = "#BBD8B4", "C4-OE" = "#FEB751")
+
 # ---- Sex-linked genes -----------------------------------------------------
 # Kept as an explicit, documented QC/annotation step (flagging, not silent
 # removal) -- see rationale in 02_differential_expression_deseq2.R.
