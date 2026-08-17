@@ -71,17 +71,9 @@ save_figure <- function(plot, name, width = 6.5, height = 4.5) {
   readRDS(f)   # list: results_table, vst_matrix, norm_counts, metadata
 }
 
-# =============================================================================
-# FIGURES
-# =============================================================================
-
-# --- C4 expression across samples --------------------------------------------
-# Bar graph of per-sample expression for one gene (default C4b, the mouse
-# complement C4 gene driven up in the C4-OE model), one bar per sample,
-# coloured by genotype. `value` picks DESeq2 median-of-ratios normalized counts
-# (the natural "expression level"; default) or the variance-stabilized (VST)
-# values used for the PCA/heatmap.
-fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst")) {
+# Long-format expression for one gene: one row per sample, with display labels.
+# `value` is "normalized" (DESeq2 median-of-ratios counts) or "vst".
+.gene_expression_long <- function(gene = "C4b", value = c("normalized", "vst")) {
   value <- match.arg(value)
   d <- .load_deseq_cache()
 
@@ -97,7 +89,7 @@ fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst")) {
   }
 
   sample_cols <- setdiff(names(expr_tbl), "gene")
-  df <- expr_tbl %>%
+  expr_tbl %>%
     filter(gene == !!gene) %>%
     pivot_longer(all_of(sample_cols), names_to = "sample", values_to = "expr") %>%
     left_join(d$metadata, by = "sample") %>%
@@ -106,7 +98,21 @@ fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst")) {
       # keep the metadata's sample order (Control group first, then C4-OE)
       sample_label   = factor(sample_label, levels = d$metadata$sample_label)
     )
+}
 
+# =============================================================================
+# FIGURES
+# =============================================================================
+
+# --- C4 expression across samples --------------------------------------------
+# Bar graph of per-sample expression for one gene (default C4b, the mouse
+# complement C4 gene driven up in the C4-OE model), one bar per sample,
+# coloured by genotype. `value` picks DESeq2 median-of-ratios normalized counts
+# (the natural "expression level"; default) or the variance-stabilized (VST)
+# values used for the PCA/heatmap.
+fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst")) {
+  value <- match.arg(value)
+  df    <- .gene_expression_long(gene, value)
   y_lab <- if (value == "normalized") "Normalized counts" else "Expression (VST)"
 
   p <- ggplot(df, aes(x = sample_label, y = expr, fill = genotype_label)) +
@@ -125,6 +131,32 @@ fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst")) {
   save_figure(p, paste0("fig_", tolower(gene), "_expression_", value))
 }
 
+# --- C4 expression by genotype: box-and-whiskers + one dot per animal ---------
+# Box-and-whiskers of a gene's expression per genotype group, with each animal
+# (sample) overlaid as a dot. Same data as fig_c4_expression, summarised by
+# group. `value` picks normalized counts (default) or VST.
+fig_c4_expression_box <- function(gene = "C4b", value = c("normalized", "vst")) {
+  value <- match.arg(value)
+  df    <- .gene_expression_long(gene, value)
+  y_lab <- if (value == "normalized") "Normalized counts" else "Expression (VST)"
+
+  p <- ggplot(df, aes(x = genotype_label, y = expr)) +
+    geom_boxplot(aes(fill = genotype_label), width = 0.55, alpha = 0.45,
+                 colour = "black", outlier.shape = NA) +
+    # one dot per animal; fixed seed keeps the horizontal jitter reproducible
+    geom_point(aes(fill = genotype_label),
+               position = position_jitter(width = 0.10, height = 0, seed = 1234),
+               shape = 21, size = 3, colour = "black", stroke = 0.4) +
+    scale_fill_manual(values = GENOTYPE_COLOURS, guide = "none") +
+    scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+    labs(title = paste0(gene, " expression by genotype"), x = NULL, y = y_lab) +
+    theme_classic(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"))
+
+  save_figure(p, paste0("fig_", tolower(gene), "_expression_box_", value),
+              width = 4.2, height = 4.5)
+}
+
 # =============================================================================
 # REGISTRY + DISPATCH
 # =============================================================================
@@ -132,7 +164,8 @@ fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst")) {
 # figures here; set FIGURES_TO_MAKE (above, before sourcing) to a subset of
 # these names, or leave it as "all".
 PAPER_FIGURES <- list(
-  c4_expression = function() fig_c4_expression(gene = "C4b", value = "normalized")
+  c4_expression     = function() fig_c4_expression(gene = "C4b", value = "normalized"),
+  c4_expression_box = function() fig_c4_expression_box(gene = "C4b", value = "normalized")
 )
 
 if (!exists("FIGURES_TO_MAKE")) FIGURES_TO_MAKE <- "all"
