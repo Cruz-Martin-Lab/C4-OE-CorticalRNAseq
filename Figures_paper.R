@@ -50,7 +50,8 @@ DIR_PAPER_FIGS <- file.path(DIR_OUTPUT, "paper_figures")
 if (!dir.exists(DIR_PAPER_FIGS)) dir.create(DIR_PAPER_FIGS, recursive = TRUE)
 
 # Genotype fill colours, reused by every figure that splits by group.
-GENOTYPE_COLOURS <- c("Control" = "#7F7F7F", "C4-OE" = "#D73027")
+# Change these two values to recolour every figure consistently.
+GENOTYPE_COLOURS <- c("Control" = "#BBD8B4", "C4-OE" = "#FEB751")
 
 save_figure <- function(plot, name, width = 6.5, height = 4.5) {
   pdf_path <- file.path(DIR_PAPER_FIGS, paste0(name, ".pdf"))
