@@ -175,26 +175,23 @@ fig_cholesterol_go_up <- function(pattern = "cholesterol|sterol") {
   go <- read.csv(f, check.names = FALSE)
   sig <- go %>%
     filter(p.adjust < PADJ_THRESHOLD,
-           grepl(pattern, Description, ignore.case = TRUE)) %>%
-    arrange(Count, dplyr::desc(p.adjust)) %>%        # largest gene count at top
-    mutate(Description = factor(Description, levels = Description))
+           grepl(pattern, Description, ignore.case = TRUE))
 
   if (nrow(sig) == 0) {
     stop("No significant GO:BP terms matching '", pattern,
          "' among up-regulated genes.", call. = FALSE)
   }
 
-  # Bar length = number of up-regulated genes in the term; fill = adjusted p,
-  # using the same blue-to-red scale as the pipeline's GO barplots
-  # (make_go_barplot in R/functions.R), so the manuscript panels match.
-  p <- ggplot(sig, aes(x = Count, y = Description, fill = p.adjust)) +
-    geom_col(colour = "black", width = 0.72) +
+  # Built to match the pipeline's make_go_barplot() exactly -- same aesthetics,
+  # geom, blue-to-red p.adjust scale, coord_flip() and theme_minimal() -- so
+  # this panel is visually identical to the other GO barplots.
+  p <- ggplot(sig, aes(x = reorder(Description, Count), y = Count, fill = p.adjust)) +
+    geom_bar(stat = "identity") +
     scale_fill_gradient(low = "blue", high = "red", name = "p.adjust") +
-    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+    coord_flip() +
     labs(title = "Cholesterol-related biological processes (up-regulated genes)",
-         x = "Gene count", y = NULL) +
-    theme_classic(base_size = 11) +
-    theme(plot.title = element_text(face = "bold", size = 12))
+         x = NULL, y = "Gene count") +
+    theme_minimal()
 
   save_figure(p, "fig_cholesterol_go_up", width = 8.5, height = 4.5)
 }
