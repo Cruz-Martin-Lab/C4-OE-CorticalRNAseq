@@ -176,8 +176,7 @@ fig_cholesterol_go_up <- function(pattern = "cholesterol|sterol") {
   sig <- go %>%
     filter(p.adjust < PADJ_THRESHOLD,
            grepl(pattern, Description, ignore.case = TRUE)) %>%
-    mutate(neglog10_padj = -log10(p.adjust)) %>%
-    arrange(neglog10_padj) %>%                                  # most sig. at top
+    arrange(Count, dplyr::desc(p.adjust)) %>%        # largest gene count at top
     mutate(Description = factor(Description, levels = Description))
 
   if (nrow(sig) == 0) {
@@ -185,12 +184,15 @@ fig_cholesterol_go_up <- function(pattern = "cholesterol|sterol") {
          "' among up-regulated genes.", call. = FALSE)
   }
 
-  p <- ggplot(sig, aes(x = neglog10_padj, y = Description)) +
-    geom_col(fill = GENOTYPE_COLOURS[["C4-OE"]], colour = "black", width = 0.72) +
-    geom_text(aes(label = paste0(Count, " genes")), hjust = -0.15, size = 3.1) +
-    scale_x_continuous(expand = expansion(mult = c(0, 0.18))) +
+  # Bar length = number of up-regulated genes in the term; fill = adjusted p,
+  # using the same blue-to-red scale as the pipeline's GO barplots
+  # (make_go_barplot in R/functions.R), so the manuscript panels match.
+  p <- ggplot(sig, aes(x = Count, y = Description, fill = p.adjust)) +
+    geom_col(colour = "black", width = 0.72) +
+    scale_fill_gradient(low = "blue", high = "red", name = "p.adjust") +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
     labs(title = "Cholesterol-related biological processes (up-regulated genes)",
-         x = expression(-log[10]~"adjusted "*italic(p)), y = NULL) +
+         x = "Gene count", y = NULL) +
     theme_classic(base_size = 11) +
     theme(plot.title = element_text(face = "bold", size = 12))
 
