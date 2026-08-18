@@ -159,6 +159,44 @@ fig_c4_expression_box <- function(gene = "C4b", value = c("normalized", "vst")) 
               width = 4.2, height = 4.5)
 }
 
+# --- Cholesterol-related GO:BP terms enriched among UP-regulated genes --------
+# Horizontal barplot of the significant (p.adjust < PADJ_THRESHOLD) GO Biological
+# Process terms that match `pattern` (default cholesterol/sterol) in the
+# up-regulated ORA. Bars are drawn in the C4-OE colour (these processes go UP in
+# C4-OE), ranked by significance, and labelled with the number of genes.
+fig_cholesterol_go_up <- function(pattern = "cholesterol|sterol") {
+  f <- file.path(DIR_OUTPUT, "01_bulk_rnaseq_DE", "03_enrichment",
+                 "tables", "GO_ORA_BP_up.csv")
+  if (!file.exists(f)) {
+    stop("Up-regulated GO:BP ORA table not found:\n  ", f,
+         "\nRun strand 01 first: source(\"run_full_analysis.R\").", call. = FALSE)
+  }
+
+  go <- read.csv(f, check.names = FALSE)
+  sig <- go %>%
+    filter(p.adjust < PADJ_THRESHOLD,
+           grepl(pattern, Description, ignore.case = TRUE)) %>%
+    mutate(neglog10_padj = -log10(p.adjust)) %>%
+    arrange(neglog10_padj) %>%                                  # most sig. at top
+    mutate(Description = factor(Description, levels = Description))
+
+  if (nrow(sig) == 0) {
+    stop("No significant GO:BP terms matching '", pattern,
+         "' among up-regulated genes.", call. = FALSE)
+  }
+
+  p <- ggplot(sig, aes(x = neglog10_padj, y = Description)) +
+    geom_col(fill = GENOTYPE_COLOURS[["C4-OE"]], colour = "black", width = 0.72) +
+    geom_text(aes(label = paste0(Count, " genes")), hjust = -0.15, size = 3.1) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.18))) +
+    labs(title = "Cholesterol-related biological processes (up-regulated genes)",
+         x = expression(-log[10]~"adjusted "*italic(p)), y = NULL) +
+    theme_classic(base_size = 11) +
+    theme(plot.title = element_text(face = "bold", size = 12))
+
+  save_figure(p, "fig_cholesterol_go_up", width = 8.5, height = 4.5)
+}
+
 # =============================================================================
 # REGISTRY + DISPATCH
 # =============================================================================
@@ -166,8 +204,9 @@ fig_c4_expression_box <- function(gene = "C4b", value = c("normalized", "vst")) 
 # figures here; set FIGURES_TO_MAKE (above, before sourcing) to a subset of
 # these names, or leave it as "all".
 PAPER_FIGURES <- list(
-  c4_expression     = function() fig_c4_expression(gene = "C4b", value = "normalized"),
-  c4_expression_box = function() fig_c4_expression_box(gene = "C4b", value = "normalized")
+  c4_expression      = function() fig_c4_expression(gene = "C4b", value = "normalized"),
+  c4_expression_box  = function() fig_c4_expression_box(gene = "C4b", value = "normalized"),
+  cholesterol_go_up  = function() fig_cholesterol_go_up()
 )
 
 if (!exists("FIGURES_TO_MAKE")) FIGURES_TO_MAKE <- "all"
