@@ -457,13 +457,13 @@ fig4c_go_down <- function(save = TRUE) {
 #     synaptic-translation set. Both GO:BP; swap via the arguments.
 fig4d_synaptic_gsea_curves <- function(
     up_pathway   = "GOBP_RECEPTOR_LOCALIZATION_TO_SYNAPSE",
-    down_pathway = "GOBP_TRANSLATION_AT_SYNAPSE", save = TRUE) {
+    down_pathway = "GOBP_TRANSLATION_AT_SYNAPSE", ncol = 2, save = TRUE) {
   up   <- build_enrichment_curve("go_bp", up_pathway)
   down <- build_enrichment_curve("go_bp", down_pathway)
   combined <- if (requireNamespace("patchwork", quietly = TRUE)) {
-    patchwork::wrap_plots(up, down, ncol = 2)
+    patchwork::wrap_plots(up, down, ncol = ncol)
   } else if (requireNamespace("cowplot", quietly = TRUE)) {
-    cowplot::plot_grid(up, down, ncol = 2)
+    cowplot::plot_grid(up, down, ncol = ncol)
   } else {
     stop("Package 'patchwork' or 'cowplot' is required to pair the curves.", call. = FALSE)
   }
@@ -544,17 +544,16 @@ fig5b_go_mf_up <- function(save = TRUE) {
   p
 }
 
-# 5C. Up-regulated canonical pathways: the 10 most positive significant sets,
-#     plus every significant cell-junction / adhesion / collagen set
-#     (`include_pattern`) so the adhesion pathways cited in the text stay on the
-#     panel even when they fall outside the top 10. Up-only by design -- the
-#     negative canonical pathways are panel 4E.
+# 5C. Canonical pathways, diverging NES: the 10 most positive and 10 most
+#     negative significant sets, plus every significant cell-junction /
+#     adhesion / collagen set (`include_pattern`) so the adhesion pathways cited
+#     in the text stay on the panel even when they fall outside the top 10.
 fig5c_canonical_gsea_nes <- function(save = TRUE) {
   p <- build_gsea_nes_barplot(
-    "GSEA_cp_only.csv", "Canonical pathways (up-regulated, GSEA)",
-    direction = "up", top_each = 10,
+    "GSEA_cp_only.csv", "Canonical pathways (GSEA)",
+    direction = "both", top_each = 10,
     include_pattern = "JUNCTION|ADHERENS|ADHESION|COLLAGEN")
-  if (save) save_figure(p, "fig5c_canonical_gsea_nes", width = 9, height = 5.5)
+  if (save) save_figure(p, "fig5c_canonical_gsea_nes", width = 9, height = 8)
   p
 }
 
@@ -617,30 +616,31 @@ figure3 <- function() {
 }
 
 # --- Figure 4: the synaptic directional split --------------------------------
-# Up-regulated on top (A, B), down-regulated below (C, D), and the paired
-# enrichment curves across the bottom (E). Laying the up-regulated row above the
-# down-regulated one makes the directional asymmetry the visual argument.
+# The four panels of the figure proposal: up-regulated on top (A synaptic and
+# axonal processes, B compartments), down-regulated below (C processes and
+# compartments, D the paired enrichment curves). Laying A/B above C/D makes the
+# directional asymmetry the visual argument of the figure.
 #
-# NOTE ON PANEL LETTERS: tags are assigned in the order `panels` are listed, so
-# the ribosomal barplot (fig4e_*) is the FOURTH panel and therefore prints as
-# "D", while the paired curves (fig4d_*) print as "E". That is deliberate: it
-# keeps the letters in reading order, gives the two curves a full-width row
-# (they overlap at half width), and matches the Results text, which cites
-# "Fig. 4D" for the cytoplasmic-ribosome / NMD / translation-initiation
-# negatives. To swap them back, exchange the last two entries of `panels` and
-# use the design "AABB\nCCDD\nEEEE".
+# D holds two curves; here they are STACKED (ncol = 1) so each gets the full
+# width of its half-page cell -- side by side in that space their titles and
+# axis labels collide. The stand-alone fig4d file keeps them side by side.
+#
+# fig4e_translation_gsea_nes (the canonical ribosomal collapse) is deliberately
+# NOT on this page: those sets are the negative half of panel 5C. It stays
+# registered as a stand-alone panel -- add it back by appending it to `panels`
+# and using the design "AABB\nCCDD\nEEEE".
 figure4 <- function() {
   .require_patchwork()
   panels <- list(
-    fig4a_go_bp_synaptic_up(save = FALSE),        # -> A
-    fig4b_go_cc_up(save = FALSE),                 # -> B
-    fig4c_go_down(save = FALSE),                  # -> C
-    fig4e_translation_gsea_nes(save = FALSE),     # -> D  (ribosomal collapse)
-    # The curves are themselves a pair; wrap_elements makes patchwork treat them
-    # as ONE panel, so they get a single tag instead of one tag per curve.
-    patchwork::wrap_elements(fig4d_synaptic_gsea_curves(save = FALSE)))  # -> E
-  p <- .assemble(panels, design = "AABB\nCCDD\nEEEE", heights = c(1.15, 1, 0.9))
-  save_figure(p, "figure4_synaptic_split", width = 15, height = 14)
+    fig4a_go_bp_synaptic_up(save = FALSE),   # -> A
+    fig4b_go_cc_up(save = FALSE),            # -> B
+    fig4c_go_down(save = FALSE),             # -> C
+    # wrap_elements makes patchwork treat the curve pair as ONE panel, so it
+    # gets a single tag instead of one tag per curve.
+    patchwork::wrap_elements(
+      fig4d_synaptic_gsea_curves(ncol = 1, save = FALSE)))   # -> D
+  p <- .assemble(panels, design = "AB\nCD", heights = c(1, 1.15))
+  save_figure(p, "figure4_synaptic_split", width = 15, height = 11)
 }
 
 # --- Figure 5: vascular, adhesion, and rank-based findings --------------------
