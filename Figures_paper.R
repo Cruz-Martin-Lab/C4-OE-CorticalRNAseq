@@ -123,7 +123,8 @@ save_figure <- function(plot, name, width = 6.5, height = 4.5) {
 # GO ORA barplot in make_go_barplot() style. Reads one or more GO ORA CSVs
 # (basenames under DIR_ENRICH), keeps significant terms (optionally matching
 # `pattern` in the Description), and plots the top `num_paths` by gene Count.
-build_go_ora_barplot <- function(files, title, pattern = NULL, num_paths = 20,
+build_go_ora_barplot <- function(files, title, pattern = NULL, include_terms = NULL,
+                                 exclude = NULL, num_paths = 20,
                                  padj_threshold = PADJ_THRESHOLD) {
   d <- do.call(rbind, lapply(files, function(f) {
     p <- file.path(DIR_ENRICH, f)
@@ -133,10 +134,14 @@ build_go_ora_barplot <- function(files, title, pattern = NULL, num_paths = 20,
     }
     read.csv(p, check.names = FALSE)[, c("Description", "Count", "p.adjust")]
   }))
-  d <- d %>% filter(!is.na(p.adjust), p.adjust < padj_threshold)
-  if (!is.null(pattern)) d <- d %>% filter(grepl(pattern, Description, ignore.case = TRUE))
-  d <- d %>% distinct(Description, .keep_all = TRUE) %>%
-    arrange(desc(Count)) %>% head(num_paths)
+  d <- d %>% filter(!is.na(p.adjust), p.adjust < padj_threshold) %>%
+    distinct(Description, .keep_all = TRUE)
+  # `pattern` keeps terms matching a regex; `include_terms` keeps an exact set;
+  # `exclude` drops terms matching a regex.
+  if (!is.null(pattern))       d <- d %>% filter(grepl(pattern, Description, ignore.case = TRUE))
+  if (!is.null(include_terms)) d <- d %>% filter(Description %in% include_terms)
+  if (!is.null(exclude))       d <- d %>% filter(!grepl(exclude, Description, ignore.case = TRUE))
+  d <- d %>% arrange(desc(Count)) %>% head(num_paths)
   if (nrow(d) == 0) stop("No significant GO terms for '", title, "'.", call. = FALSE)
 
   ggplot(d, aes(x = reorder(Description, Count), y = Count, fill = p.adjust)) +
@@ -319,11 +324,23 @@ fig3d_wp_cholesterol_lollipop <- function() {
 
 # --- FIGURE 4: synaptic directional split ------------------------------------
 
-# 4A. Synaptic GO:BP terms among up-regulated genes.
+# 4A. Synaptic + axonal GO:BP terms among up-regulated genes. Curated: the
+#     synaptic-set terms plus axonogenesis / axon extension (which live in the
+#     broader BP-up table), excluding "regulation of synapse structure or
+#     activity". Edit `include_terms` to change which terms appear.
 fig4a_go_bp_synaptic_up <- function() {
-  p <- build_go_ora_barplot("GO_ORA_BP_synaptic_up.csv",
-                            "Synaptic biological processes (up-regulated)")
-  save_figure(p, "fig4a_go_bp_synaptic_up", width = 8, height = 3.5)
+  p <- build_go_ora_barplot(
+    c("GO_ORA_BP_synaptic_up.csv", "GO_ORA_BP_up.csv"),
+    "Synaptic and axonal biological processes (up-regulated)",
+    include_terms = c(
+      "regulation of synapse organization",
+      "synapse assembly",
+      "postsynaptic modulation of chemical synaptic transmission",
+      "neuromuscular junction development",
+      "inhibitory synapse assembly",
+      "axonogenesis",
+      "axon extension"))
+  save_figure(p, "fig4a_go_bp_synaptic_up", width = 8, height = 3.8)
 }
 
 # 4B. GO:CC compartments among up-regulated genes.
