@@ -187,7 +187,8 @@ build_go_ora_barplot <- function(files, title, pattern = NULL, include_terms = N
 # drop a gene set that the manuscript text cites. Long set names are wrapped at
 # `wrap` characters so the bars keep their width.
 build_gsea_nes_barplot <- function(files, title, top_each = NULL, pattern = NULL,
-                                   include_pattern = NULL, mark_collections = FALSE,
+                                   include_pattern = NULL, exclude_sets = NULL,
+                                   mark_collections = FALSE,
                                    direction = c("both", "up", "down"),
                                    padj_threshold = PADJ_THRESHOLD, wrap = 55) {
   direction <- match.arg(direction)
@@ -201,6 +202,16 @@ build_gsea_nes_barplot <- function(files, title, top_each = NULL, pattern = NULL
   })) %>%
     filter(!is.na(padj), padj < padj_threshold) %>%
     distinct(pathway, .keep_all = TRUE)   # theme tables repeat a set across collections
+
+  # Drop sets shown on another figure BEFORE any top-N cut, so the next-ranked
+  # sets move up to fill their places rather than leaving the panel short.
+  # Matched on the pathway id AND on the cleaned display name, so the same
+  # pathway curated by two collections (WP_X / REACTOME_X) is caught either way.
+  if (!is.null(exclude_sets) && length(exclude_sets)) {
+    all_sig <- all_sig %>%
+      filter(!pathway %in% exclude_sets,
+             !.clean_pathway(pathway) %in% .clean_pathway(exclude_sets))
+  }
 
   d <- all_sig
   if (!is.null(pattern)) d <- d %>% filter(grepl(pattern, pathway, ignore.case = TRUE))
@@ -490,6 +501,32 @@ fig4e_translation_gsea_nes <- function(save = TRUE) {
 
 # --- FIGURE 5: vascular, adhesion, and rank-based findings --------------------
 
+# Gene sets that already appear on another figure. 5C is the broad "everything
+# else" canonical-pathway panel, so it should not repeat what Figure 3 and panel
+# 5D already show; `build_gsea_nes_barplot(exclude_sets = )` drops these before
+# the top-N cut, so the next-ranked sets take their place.
+#
+# Read from the tables the other panels use, so this follows them automatically
+# if those panels change.
+#
+# NOTE: fig4e_translation_gsea_nes is deliberately NOT counted here. It is a
+# stand-alone panel that is not on any assembled figure, and its sets are 5C's
+# entire negative half -- counting it would empty that half of the panel.
+.sets_shown_elsewhere <- function(padj_threshold = PADJ_THRESHOLD) {
+  tables <- c("GSEA_theme_cholesterol_lipid.csv",                 # panel 3B
+              "GSEA_hallmark.csv", "GSEA_theme_immune.csv")       # panel 5D
+  from_tables <- unlist(lapply(tables, function(f) {
+    path <- file.path(DIR_ENRICH, f)
+    if (!file.exists(path)) return(character(0))
+    d <- read.csv(path, check.names = FALSE)
+    d$pathway[!is.na(d$padj) & d$padj < padj_threshold]
+  }))
+  unique(c(from_tables,
+           "WP_CHOLESTEROL_BIOSYNTHESIS",             # panel 3A curve
+           "GOBP_RECEPTOR_LOCALIZATION_TO_SYNAPSE",   # panel 4D curves
+           "GOBP_TRANSLATION_AT_SYNAPSE"))
+}
+
 # 5A. Vascular / endothelial GO:BP terms among up-regulated genes. Curated to
 #     the terms cited in the text.
 fig5a_go_bp_vascular_up <- function(save = TRUE) {
@@ -558,7 +595,8 @@ fig5c_canonical_gsea_nes <- function(save = TRUE) {
   p <- build_gsea_nes_barplot(
     "GSEA_cp_only.csv", "Canonical pathways (GSEA)",
     direction = "both", top_each = 10,
-    include_pattern = "JUNCTION|ADHERENS|ADHESION|COLLAGEN")
+    include_pattern = "JUNCTION|ADHERENS|ADHESION|COLLAGEN",
+    exclude_sets = .sets_shown_elsewhere())
   if (save) save_figure(p, "fig5c_canonical_gsea_nes", width = 9, height = 8)
   p
 }
