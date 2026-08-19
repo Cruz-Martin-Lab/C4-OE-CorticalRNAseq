@@ -442,14 +442,18 @@ fig4b_go_cc_up <- function(save = TRUE) {
   p
 }
 
-# 4C. Down-regulated GO:BP + GO:CC -- every significant term in both tables
-#     (5 BP + cytosolic ribosome): the translation-at-synapse terms and the
-#     cytosolic ribosome cited in the text, plus the two amine-catabolism terms.
+# 4C. Down-regulated GO:BP + GO:CC -- the significant terms of both tables:
+#     translation at synapse and the cytosolic ribosome cited in the text, plus
+#     the two amine-catabolism terms.
+#     "translation at presynapse" and "translation at postsynapse" are excluded:
+#     they are the same 11 genes at the same p.adjust as "translation at
+#     synapse", so they add three identical bars instead of one.
 fig4c_go_down <- function(save = TRUE) {
   p <- build_go_ora_barplot(
     c("GO_ORA_BP_down.csv", "GO_ORA_CC_down.csv"),
-    "Down-regulated processes and compartments")
-  if (save) save_figure(p, "fig4c_go_down", width = 8, height = 3.2)
+    "Down-regulated processes and compartments",
+    exclude = "translation at (pre|post)synapse")
+  if (save) save_figure(p, "fig4c_go_down", width = 8, height = 2.6)
   p
 }
 
