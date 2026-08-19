@@ -126,15 +126,24 @@ save_figure <- function(plot, name, width = 6.5, height = 4.5) {
   ifelse(grepl(re, x), sub(re, "\\1", x), "")
 }
 
-# Different collections curate the same pathway under the same name (e.g.
-# WP_CHOLESTEROL_BIOSYNTHESIS and REACTOME_CHOLESTEROL_BIOSYNTHESIS both clean
-# to "cholesterol biosynthesis"). Duplicate labels would make ggplot STACK the
-# two bars into one impossible NES, so disambiguate them with the collection.
-.unique_labels <- function(pathway) {
+# Display labels for a set of pathway ids, tagged with their collection where
+# that matters:
+#   * Different collections curate the same pathway under the same name (e.g.
+#     WP_CHOLESTEROL_BIOSYNTHESIS and REACTOME_CHOLESTEROL_BIOSYNTHESIS both
+#     clean to "cholesterol biosynthesis"). Duplicate labels would make ggplot
+#     STACK the two bars into one impossible NES, so those are always tagged.
+#   * `mark_collections` additionally tags every set that is NOT from the
+#     panel's dominant collection, so a mostly-Hallmark panel does not silently
+#     present a GO:BP or Reactome set as if it were a Hallmark one.
+.set_labels <- function(pathway, mark_collections = FALSE) {
   lab  <- .clean_pathway(pathway)
-  dup  <- lab %in% lab[duplicated(lab)]
   coll <- .pathway_collection(pathway)
-  lab[dup] <- paste0(lab[dup], " (", coll[dup], ")")
+  tag  <- lab %in% lab[duplicated(lab)]
+  if (isTRUE(mark_collections) && any(nzchar(coll))) {
+    dominant <- names(sort(table(coll[nzchar(coll)]), decreasing = TRUE))[1]
+    tag <- tag | (nzchar(coll) & coll != dominant)
+  }
+  lab[tag] <- paste0(lab[tag], " (", coll[tag], ")")
   lab
 }
 
@@ -178,7 +187,7 @@ build_go_ora_barplot <- function(files, title, pattern = NULL, include_terms = N
 # drop a gene set that the manuscript text cites. Long set names are wrapped at
 # `wrap` characters so the bars keep their width.
 build_gsea_nes_barplot <- function(files, title, top_each = NULL, pattern = NULL,
-                                   include_pattern = NULL,
+                                   include_pattern = NULL, mark_collections = FALSE,
                                    direction = c("both", "up", "down"),
                                    padj_threshold = PADJ_THRESHOLD, wrap = 55) {
   direction <- match.arg(direction)
@@ -204,12 +213,16 @@ build_gsea_nes_barplot <- function(files, title, top_each = NULL, pattern = NULL
   }
   if (direction != "both" && !is.null(top_each)) d <- head(d, top_each)
   if (!is.null(include_pattern)) {
-    d <- bind_rows(d, all_sig %>%
-                     filter(grepl(include_pattern, pathway, ignore.case = TRUE))) %>%
-      distinct(pathway, .keep_all = TRUE)
+    # Added-back sets obey `direction` too: an up-only panel must never gain a
+    # negative set just because its NAME matches (e.g. "JUNCTION" also occurs in
+    # REACTOME_..._EXON_JUNCTION_COMPLEX_EJC, a strongly negative NMD set).
+    extra <- all_sig %>% filter(grepl(include_pattern, pathway, ignore.case = TRUE))
+    if (direction == "up")   extra <- extra %>% filter(NES > 0)
+    if (direction == "down") extra <- extra %>% filter(NES < 0)
+    d <- bind_rows(d, extra) %>% distinct(pathway, .keep_all = TRUE)
   }
   if (nrow(d) == 0) stop("No significant gene sets for '", title, "'.", call. = FALSE)
-  d <- d %>% mutate(label = .unique_labels(pathway))
+  d <- d %>% mutate(label = .set_labels(pathway, mark_collections))
   if (!is.null(wrap)) {
     d$label <- vapply(d$label,
                       function(s) paste(strwrap(s, width = wrap), collapse = "\n"), "")
@@ -266,7 +279,8 @@ build_enrichment_curve <- function(collection, pathway, title = NULL) {
 # coloured by genotype. `value` picks DESeq2 median-of-ratios normalized counts
 # (the natural "expression level"; default) or the variance-stabilized (VST)
 # values used for the PCA/heatmap.
-fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst")) {
+fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst"),
+                                save = TRUE) {
   value <- match.arg(value)
   df    <- .gene_expression_long(gene, value)
   y_lab <- if (value == "normalized") "Normalized counts" else "Expression (VST)"
@@ -284,14 +298,16 @@ fig_c4_expression <- function(gene = "C4b", value = c("normalized", "vst")) {
       plot.title = element_text(face = "bold")
     )
 
-  save_figure(p, paste0("fig_", tolower(gene), "_expression_", value))
+  if (save) save_figure(p, paste0("fig_", tolower(gene), "_expression_", value))
+  p
 }
 
 # --- C4 expression by genotype: box-and-whiskers + one dot per animal ---------
 # Box-and-whiskers of a gene's expression per genotype group, with each animal
 # (sample) overlaid as a dot. Same data as fig_c4_expression, summarised by
 # group. `value` picks normalized counts (default) or VST.
-fig_c4_expression_box <- function(gene = "C4b", value = c("normalized", "vst")) {
+fig_c4_expression_box <- function(gene = "C4b", value = c("normalized", "vst"),
+                                    save = TRUE) {
   value <- match.arg(value)
   df    <- .gene_expression_long(gene, value)
   y_lab <- if (value == "normalized") "Normalized counts" else "Expression (VST)"
@@ -309,24 +325,27 @@ fig_c4_expression_box <- function(gene = "C4b", value = c("normalized", "vst")) 
     theme_classic(base_size = 12) +
     theme(plot.title = element_text(face = "bold"))
 
-  save_figure(p, paste0("fig_", tolower(gene), "_expression_box_", value),
-              width = 4.2, height = 4.5)
+  if (save) save_figure(p, paste0("fig_", tolower(gene), "_expression_box_", value),
+                        width = 4.2, height = 4.5)
+  p
 }
 
 # --- FIGURE 3: cholesterol biosynthesis --------------------------------------
 
 # 3A. GSEA running enrichment-score curve for WP_CHOLESTEROL_BIOSYNTHESIS.
-fig3a_cholesterol_gsea_curve <- function() {
+fig3a_cholesterol_gsea_curve <- function(save = TRUE) {
   p <- build_enrichment_curve("cp_only", "WP_CHOLESTEROL_BIOSYNTHESIS",
                               "WP cholesterol biosynthesis (GSEA)")
-  save_figure(p, "fig3a_cholesterol_gsea_curve", width = 6, height = 4.2)
+  if (save) save_figure(p, "fig3a_cholesterol_gsea_curve", width = 6, height = 4.2)
+  p
 }
 
 # 3B. Cholesterol / sterol gene sets across collections; NES coloured by padj.
-fig3b_cholesterol_gsea_nes <- function() {
+fig3b_cholesterol_gsea_nes <- function(save = TRUE) {
   p <- build_gsea_nes_barplot("GSEA_theme_cholesterol_lipid.csv",
                               "Cholesterol / sterol gene sets (GSEA)")
-  save_figure(p, "fig3b_cholesterol_gsea_nes", width = 8.5, height = 6)
+  if (save) save_figure(p, "fig3b_cholesterol_gsea_nes", width = 8.5, height = 6)
+  p
 }
 
 # 3C. Cholesterol GO:BP terms among up-regulated genes (make_go_barplot style).
@@ -334,7 +353,7 @@ fig3b_cholesterol_gsea_nes <- function() {
 #     (10 terms), which includes the 6 cited in the manuscript text. The two
 #     significant glycosphingolipid terms are lipid but not sterol, so they are
 #     left out of the cholesterol panel.
-fig_cholesterol_go_up <- function() {
+fig_cholesterol_go_up <- function(save = TRUE) {
   p <- build_go_ora_barplot(
     "GO_ORA_BP_up.csv",
     "Cholesterol-related biological processes (up-regulated genes)",
@@ -351,13 +370,14 @@ fig_cholesterol_go_up <- function() {
       "cholesterol metabolic process",
       "sterol metabolic process",
       "sterol biosynthetic process"))
-  save_figure(p, "fig_cholesterol_go_up", width = 8.5, height = 5)
+  if (save) save_figure(p, "fig_cholesterol_go_up", width = 8.5, height = 5)
+  p
 }
 
 # 3D. WP cholesterol biosynthesis genes as a lollipop by log2 fold change.
 #     Reproduces the pipeline's plot_pathway_lollipop() exactly: coloured by
 #     significance (red/blue), point size by |logFC|, genes ordered by logFC.
-fig3d_wp_cholesterol_lollipop <- function() {
+fig3d_wp_cholesterol_lollipop <- function(save = TRUE) {
   d     <- .load_deseq_cache()
   genes <- .gmt_pathway("cp_only", "WP_CHOLESTEROL_BIOSYNTHESIS")
   df <- d$results_table %>%
@@ -381,7 +401,8 @@ fig3d_wp_cholesterol_lollipop <- function() {
     theme_classic(base_size = 11) +
     theme(plot.title = element_text(face = "bold", hjust = 0.5),
           axis.text.y = element_text(size = 9))
-  save_figure(p, "fig3d_wp_cholesterol_lollipop", width = 6, height = 5)
+  if (save) save_figure(p, "fig3d_wp_cholesterol_lollipop", width = 6, height = 5)
+  p
 }
 
 # --- FIGURE 4: synaptic directional split ------------------------------------
@@ -392,7 +413,7 @@ fig3d_wp_cholesterol_lollipop <- function() {
 #     Note: "regulation of synapse structure or activity" is the parent of
 #     "regulation of synapse organization" and carries the same 47 genes; it is
 #     part of the synaptic set, so both appear. Drop it here to de-duplicate.
-fig4a_go_bp_synaptic_up <- function() {
+fig4a_go_bp_synaptic_up <- function(save = TRUE) {
   p <- build_go_ora_barplot(
     c("GO_ORA_BP_synaptic_up.csv", "GO_ORA_BP_up.csv"),
     "Synaptic and axonal biological processes (up-regulated)",
@@ -407,33 +428,36 @@ fig4a_go_bp_synaptic_up <- function() {
       # axonal terms cited in the text
       "axonogenesis",
       "axon extension"))
-  save_figure(p, "fig4a_go_bp_synaptic_up", width = 8.5, height = 4)
+  if (save) save_figure(p, "fig4a_go_bp_synaptic_up", width = 8.5, height = 4)
+  p
 }
 
 # 4B. GO:CC compartments among up-regulated genes -- all 15 significant terms
 #     (the postsynaptic / dendritic compartments cited in the text plus the
 #     matrix and basolateral-membrane compartments that come with them).
-fig4b_go_cc_up <- function() {
+fig4b_go_cc_up <- function(save = TRUE) {
   p <- build_go_ora_barplot(
     "GO_ORA_CC_up.csv", "Cellular compartments (up-regulated)")
-  save_figure(p, "fig4b_go_cc_up", width = 8.5, height = 5.5)
+  if (save) save_figure(p, "fig4b_go_cc_up", width = 8.5, height = 5.5)
+  p
 }
 
 # 4C. Down-regulated GO:BP + GO:CC -- every significant term in both tables
 #     (5 BP + cytosolic ribosome): the translation-at-synapse terms and the
 #     cytosolic ribosome cited in the text, plus the two amine-catabolism terms.
-fig4c_go_down <- function() {
+fig4c_go_down <- function(save = TRUE) {
   p <- build_go_ora_barplot(
     c("GO_ORA_BP_down.csv", "GO_ORA_CC_down.csv"),
     "Down-regulated processes and compartments")
-  save_figure(p, "fig4c_go_down", width = 8, height = 3.2)
+  if (save) save_figure(p, "fig4c_go_down", width = 8, height = 3.2)
+  p
 }
 
 # 4D. Paired GSEA curves: an up-regulated synaptic set beside the down-regulated
 #     synaptic-translation set. Both GO:BP; swap via the arguments.
 fig4d_synaptic_gsea_curves <- function(
     up_pathway   = "GOBP_RECEPTOR_LOCALIZATION_TO_SYNAPSE",
-    down_pathway = "GOBP_TRANSLATION_AT_SYNAPSE") {
+    down_pathway = "GOBP_TRANSLATION_AT_SYNAPSE", save = TRUE) {
   up   <- build_enrichment_curve("go_bp", up_pathway)
   down <- build_enrichment_curve("go_bp", down_pathway)
   combined <- if (requireNamespace("patchwork", quietly = TRUE)) {
@@ -443,24 +467,26 @@ fig4d_synaptic_gsea_curves <- function(
   } else {
     stop("Package 'patchwork' or 'cowplot' is required to pair the curves.", call. = FALSE)
   }
-  save_figure(combined, "fig4d_synaptic_gsea_curves", width = 10, height = 4.2)
+  if (save) save_figure(combined, "fig4d_synaptic_gsea_curves", width = 10, height = 4.2)
+  combined
 }
 
 # 4E. Down-regulated canonical pathways (GSEA) -- the ribosomal / translation
 #     collapse that the text cites alongside 4D (cytoplasmic ribosomal proteins,
 #     NMD, eukaryotic translation initiation among the most negative sets).
-fig4e_translation_gsea_nes <- function() {
+fig4e_translation_gsea_nes <- function(save = TRUE) {
   p <- build_gsea_nes_barplot(
     "GSEA_cp_only.csv", "Down-regulated canonical pathways (GSEA)",
     direction = "down", top_each = 10)
-  save_figure(p, "fig4e_translation_gsea_nes", width = 9, height = 5)
+  if (save) save_figure(p, "fig4e_translation_gsea_nes", width = 9, height = 5)
+  p
 }
 
 # --- FIGURE 5: vascular, adhesion, and rank-based findings --------------------
 
 # 5A. Vascular / endothelial GO:BP terms among up-regulated genes. Curated to
 #     the terms cited in the text.
-fig5a_go_bp_vascular_up <- function() {
+fig5a_go_bp_vascular_up <- function(save = TRUE) {
   p <- build_go_ora_barplot(
     "GO_ORA_BP_up.csv", "Vascular / endothelial processes (up-regulated)",
     include_terms = c(
@@ -485,13 +511,14 @@ fig5a_go_bp_vascular_up <- function() {
       "negative regulation of blood vessel morphogenesis",
       "endothelial cell development",
       "cell migration involved in sprouting angiogenesis"))
-  save_figure(p, "fig5a_go_bp_vascular_up", width = 9, height = 6.5)
+  if (save) save_figure(p, "fig5a_go_bp_vascular_up", width = 9, height = 6.5)
+  p
 }
 
 # 5B. Molecular functions among up-regulated genes: all 12 significant GO:MF
 #     terms (adhesion, integrin and ECM among them) plus the 3 GO:BP adhesion
 #     terms cited in the text, which live in the BP-up table.
-fig5b_go_mf_up <- function() {
+fig5b_go_mf_up <- function(save = TRUE) {
   p <- build_go_ora_barplot(
     c("GO_ORA_MF_up.csv", "GO_ORA_BP_up.csv"),
     "Molecular functions and adhesion (up-regulated)",
@@ -513,30 +540,120 @@ fig5b_go_mf_up <- function() {
       "cell-substrate adhesion",
       "cell-cell adhesion via plasma-membrane adhesion molecules",
       "regulation of cell junction assembly"))
-  save_figure(p, "fig5b_go_mf_up", width = 9, height = 5.5)
+  if (save) save_figure(p, "fig5b_go_mf_up", width = 9, height = 5.5)
+  p
 }
 
-# 5C. Canonical pathways, diverging NES: the 10 most positive and 10 most
-#     negative significant sets, plus every significant cell-junction /
-#     adhesion / collagen set (`include_pattern`) so the adhesion pathways cited
-#     in the text stay on the panel even when they fall outside the top 10.
-fig5c_canonical_gsea_nes <- function() {
+# 5C. Up-regulated canonical pathways: the 10 most positive significant sets,
+#     plus every significant cell-junction / adhesion / collagen set
+#     (`include_pattern`) so the adhesion pathways cited in the text stay on the
+#     panel even when they fall outside the top 10. Up-only by design -- the
+#     negative canonical pathways are panel 4E.
+fig5c_canonical_gsea_nes <- function(save = TRUE) {
   p <- build_gsea_nes_barplot(
-    "GSEA_cp_only.csv", "Canonical pathways (GSEA)",
-    direction = "both", top_each = 10,
+    "GSEA_cp_only.csv", "Canonical pathways (up-regulated, GSEA)",
+    direction = "up", top_each = 10,
     include_pattern = "JUNCTION|ADHERENS|ADHESION|COLLAGEN")
-  save_figure(p, "fig5c_canonical_gsea_nes", width = 9, height = 8)
+  if (save) save_figure(p, "fig5c_canonical_gsea_nes", width = 9, height = 5.5)
+  p
 }
 
 # 5D. Hallmark gene sets, diverging NES: all 24 significant Hallmark sets, plus
 #     the 3 non-Hallmark interferon / cytokine sets cited in the text (response
 #     to interferon beta, interferon signaling, cytokine signaling), which come
 #     from the immune theme table. Overlapping sets are de-duplicated.
-fig5d_hallmark_gsea_nes <- function() {
+fig5d_hallmark_gsea_nes <- function(save = TRUE) {
   p <- build_gsea_nes_barplot(
     c("GSEA_hallmark.csv", "GSEA_theme_immune.csv"),
-    "Hallmark and interferon gene sets (GSEA)")
-  save_figure(p, "fig5d_hallmark_gsea_nes", width = 8.5, height = 8)
+    "Hallmark and interferon gene sets (GSEA)",
+    mark_collections = TRUE)
+  if (save) save_figure(p, "fig5d_hallmark_gsea_nes", width = 8.5, height = 8)
+  p
+}
+
+# =============================================================================
+# ASSEMBLED FIGURES
+# =============================================================================
+# One builder per manuscript figure: it lays the panels out on a single page and
+# labels them A, B, C, ... in the style of Figure 2 -- a large, plain (not bold)
+# letter at the top-left of each panel.
+#
+# The panels come from the SAME functions that write the stand-alone files,
+# called with save = FALSE so they return the ggplot without touching the disk.
+# A panel and its place in the composite therefore can never drift apart: edit
+# the panel function once and both the single file and the figure update.
+#
+# To re-arrange a figure, edit its `design` string. Each letter is an area of
+# the grid and refers to a panel BY POSITION in `panels` (A = 1st, B = 2nd, ...),
+# which is also the order the tags are assigned in -- so keep `panels` in
+# reading order and the letters on the page will match the panel names.
+
+.require_patchwork <- function() {
+  if (!requireNamespace("patchwork", quietly = TRUE)) {
+    stop("Package 'patchwork' is required to assemble the figures.\n",
+         "Install it, or build the panels individually instead.", call. = FALSE)
+  }
+}
+
+# Lay panels out on `design` and add the A/B/C/... tags.
+.assemble <- function(panels, design, heights = NULL, tag_size = 20) {
+  .require_patchwork()
+  (patchwork::wrap_plots(panels, design = design, heights = heights) +
+     patchwork::plot_annotation(tag_levels = "A")) &
+    theme(plot.tag = element_text(size = tag_size, face = "plain", hjust = 0))
+}
+
+# --- Figure 3: cholesterol biosynthesis --------------------------------------
+# A the GSEA curve and B the gene sets on top; C the GO terms and D the
+# per-gene lollipop below.
+figure3 <- function() {
+  panels <- list(
+    fig3a_cholesterol_gsea_curve(save = FALSE),
+    fig3b_cholesterol_gsea_nes(save = FALSE),
+    fig_cholesterol_go_up(save = FALSE),
+    fig3d_wp_cholesterol_lollipop(save = FALSE))
+  p <- .assemble(panels, design = "AB\nCD", heights = c(1, 1))
+  save_figure(p, "figure3_cholesterol", width = 15, height = 10)
+}
+
+# --- Figure 4: the synaptic directional split --------------------------------
+# Up-regulated on top (A, B), down-regulated below (C, D), and the paired
+# enrichment curves across the bottom (E). Laying the up-regulated row above the
+# down-regulated one makes the directional asymmetry the visual argument.
+#
+# NOTE ON PANEL LETTERS: tags are assigned in the order `panels` are listed, so
+# the ribosomal barplot (fig4e_*) is the FOURTH panel and therefore prints as
+# "D", while the paired curves (fig4d_*) print as "E". That is deliberate: it
+# keeps the letters in reading order, gives the two curves a full-width row
+# (they overlap at half width), and matches the Results text, which cites
+# "Fig. 4D" for the cytoplasmic-ribosome / NMD / translation-initiation
+# negatives. To swap them back, exchange the last two entries of `panels` and
+# use the design "AABB\nCCDD\nEEEE".
+figure4 <- function() {
+  .require_patchwork()
+  panels <- list(
+    fig4a_go_bp_synaptic_up(save = FALSE),        # -> A
+    fig4b_go_cc_up(save = FALSE),                 # -> B
+    fig4c_go_down(save = FALSE),                  # -> C
+    fig4e_translation_gsea_nes(save = FALSE),     # -> D  (ribosomal collapse)
+    # The curves are themselves a pair; wrap_elements makes patchwork treat them
+    # as ONE panel, so they get a single tag instead of one tag per curve.
+    patchwork::wrap_elements(fig4d_synaptic_gsea_curves(save = FALSE)))  # -> E
+  p <- .assemble(panels, design = "AABB\nCCDD\nEEEE", heights = c(1.15, 1, 0.9))
+  save_figure(p, "figure4_synaptic_split", width = 15, height = 14)
+}
+
+# --- Figure 5: vascular, adhesion, and rank-based findings --------------------
+# A vascular processes and B molecular functions on top; C the up-regulated
+# canonical pathways and D the Hallmark sets below.
+figure5 <- function() {
+  panels <- list(
+    fig5a_go_bp_vascular_up(save = FALSE),
+    fig5b_go_mf_up(save = FALSE),
+    fig5c_canonical_gsea_nes(save = FALSE),
+    fig5d_hallmark_gsea_nes(save = FALSE))
+  p <- .assemble(panels, design = "AB\nCD", heights = c(1, 1.35))
+  save_figure(p, "figure5_vascular_adhesion", width = 15, height = 15)
 }
 
 # =============================================================================
@@ -566,7 +683,12 @@ PAPER_FIGURES <- list(
   fig5a_go_bp_vascular_up  = fig5a_go_bp_vascular_up,
   fig5b_go_mf_up           = fig5b_go_mf_up,
   fig5c_canonical_gsea_nes = fig5c_canonical_gsea_nes,
-  fig5d_hallmark_gsea_nes  = fig5d_hallmark_gsea_nes
+  fig5d_hallmark_gsea_nes  = fig5d_hallmark_gsea_nes,
+
+  # Assembled, panel-labelled figures (the manuscript-ready pages)
+  figure3 = figure3,
+  figure4 = figure4,
+  figure5 = figure5
 )
 
 if (!exists("FIGURES_TO_MAKE")) FIGURES_TO_MAKE <- "all"
