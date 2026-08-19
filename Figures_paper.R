@@ -120,6 +120,24 @@ save_figure <- function(plot, name, width = 6.5, height = 4.5) {
   tolower(gsub("_", " ", x))
 }
 
+# The collection prefix of an MSigDB-style id ("" if it has none).
+.pathway_collection <- function(x) {
+  re <- "^(HALLMARK|GOBP|GOCC|GOMF|REACTOME|WP|KEGG|BIOCARTA|PID)_.*$"
+  ifelse(grepl(re, x), sub(re, "\\1", x), "")
+}
+
+# Different collections curate the same pathway under the same name (e.g.
+# WP_CHOLESTEROL_BIOSYNTHESIS and REACTOME_CHOLESTEROL_BIOSYNTHESIS both clean
+# to "cholesterol biosynthesis"). Duplicate labels would make ggplot STACK the
+# two bars into one impossible NES, so disambiguate them with the collection.
+.unique_labels <- function(pathway) {
+  lab  <- .clean_pathway(pathway)
+  dup  <- lab %in% lab[duplicated(lab)]
+  coll <- .pathway_collection(pathway)
+  lab[dup] <- paste0(lab[dup], " (", coll[dup], ")")
+  lab
+}
+
 # GO ORA barplot in make_go_barplot() style. Reads one or more GO ORA CSVs
 # (basenames under DIR_ENRICH), keeps significant terms (optionally matching
 # `pattern` in the Description), and plots the top `num_paths` by gene Count.
@@ -152,16 +170,30 @@ build_go_ora_barplot <- function(files, title, pattern = NULL, include_terms = N
     theme_minimal()
 }
 
-# GSEA NES barplot in plot_gsea_top() style. Reads a GSEA CSV, keeps significant
-# sets (optionally matching `pattern`), optionally taking the `top_each` most
-# extreme sets per direction, and plots NES coloured by padj.
-build_gsea_nes_barplot <- function(file, title, top_each = NULL, pattern = NULL,
+# GSEA NES barplot in plot_gsea_top() style. Reads one or more GSEA CSVs
+# (basenames under DIR_ENRICH), keeps significant sets (optionally matching
+# `pattern`), optionally taking the `top_each` most extreme sets per direction,
+# and plots NES coloured by padj. `include_pattern` adds back every significant
+# set matching a regex AFTER the top-N trim, so a rank-based selection can never
+# drop a gene set that the manuscript text cites. Long set names are wrapped at
+# `wrap` characters so the bars keep their width.
+build_gsea_nes_barplot <- function(files, title, top_each = NULL, pattern = NULL,
+                                   include_pattern = NULL,
                                    direction = c("both", "up", "down"),
-                                   padj_threshold = PADJ_THRESHOLD) {
+                                   padj_threshold = PADJ_THRESHOLD, wrap = 55) {
   direction <- match.arg(direction)
-  d <- read.csv(file.path(DIR_ENRICH, file), check.names = FALSE) %>%
+  all_sig <- do.call(rbind, lapply(files, function(f) {
+    p <- file.path(DIR_ENRICH, f)
+    if (!file.exists(p)) {
+      stop("GSEA table not found:\n  ", p,
+           "\nRun strand 01 first: source(\"run_full_analysis.R\").", call. = FALSE)
+    }
+    read.csv(p, check.names = FALSE)[, c("pathway", "NES", "padj")]
+  })) %>%
     filter(!is.na(padj), padj < padj_threshold) %>%
     distinct(pathway, .keep_all = TRUE)   # theme tables repeat a set across collections
+
+  d <- all_sig
   if (!is.null(pattern)) d <- d %>% filter(grepl(pattern, pathway, ignore.case = TRUE))
   if (direction == "up")   d <- d %>% filter(NES > 0) %>% arrange(desc(NES))
   if (direction == "down") d <- d %>% filter(NES < 0) %>% arrange(NES)
@@ -171,8 +203,17 @@ build_gsea_nes_barplot <- function(file, title, top_each = NULL, pattern = NULL,
       d %>% filter(NES < 0) %>% arrange(NES)       %>% head(top_each))
   }
   if (direction != "both" && !is.null(top_each)) d <- head(d, top_each)
+  if (!is.null(include_pattern)) {
+    d <- bind_rows(d, all_sig %>%
+                     filter(grepl(include_pattern, pathway, ignore.case = TRUE))) %>%
+      distinct(pathway, .keep_all = TRUE)
+  }
   if (nrow(d) == 0) stop("No significant gene sets for '", title, "'.", call. = FALSE)
-  d <- d %>% mutate(label = .clean_pathway(pathway))
+  d <- d %>% mutate(label = .unique_labels(pathway))
+  if (!is.null(wrap)) {
+    d$label <- vapply(d$label,
+                      function(s) paste(strwrap(s, width = wrap), collapse = "\n"), "")
+  }
 
   ggplot(d, aes(x = reorder(label, NES), y = NES, fill = padj)) +
     geom_bar(stat = "identity", width = 0.7) +
@@ -289,19 +330,28 @@ fig3b_cholesterol_gsea_nes <- function() {
 }
 
 # 3C. Cholesterol GO:BP terms among up-regulated genes (make_go_barplot style).
-#     Curated to the terms cited in the manuscript text.
+#     Every significant cholesterol / sterol / steroid term in GO_ORA_BP_up.csv
+#     (10 terms), which includes the 6 cited in the manuscript text. The two
+#     significant glycosphingolipid terms are lipid but not sterol, so they are
+#     left out of the cholesterol panel.
 fig_cholesterol_go_up <- function() {
   p <- build_go_ora_barplot(
     "GO_ORA_BP_up.csv",
     "Cholesterol-related biological processes (up-regulated genes)",
     include_terms = c(
+      # cited in the text
       "cholesterol biosynthetic process",
       "cholesterol biosynthetic process via desmosterol",
       "cholesterol biosynthetic process via lathosterol",
       "zymosterol biosynthetic process",
       "zymosterol metabolic process",
-      "steroid biosynthetic process"))
-  save_figure(p, "fig_cholesterol_go_up", width = 8.5, height = 4.5)
+      "steroid biosynthetic process",
+      # remaining significant sterol / steroid terms
+      "steroid metabolic process",
+      "cholesterol metabolic process",
+      "sterol metabolic process",
+      "sterol biosynthetic process"))
+  save_figure(p, "fig_cholesterol_go_up", width = 8.5, height = 5)
 }
 
 # 3D. WP cholesterol biosynthesis genes as a lollipop by log2 fold change.
@@ -336,49 +386,47 @@ fig3d_wp_cholesterol_lollipop <- function() {
 
 # --- FIGURE 4: synaptic directional split ------------------------------------
 
-# 4A. Synaptic + axonal GO:BP terms among up-regulated genes. Curated: the
-#     synaptic-set terms plus axonogenesis / axon extension (which live in the
-#     broader BP-up table), excluding "regulation of synapse structure or
-#     activity". Edit `include_terms` to change which terms appear.
+# 4A. Synaptic + axonal GO:BP terms among up-regulated genes. All 6 significant
+#     terms of GO_ORA_BP_synaptic_up.csv plus axonogenesis / axon extension,
+#     which are cited in the text and live in the broader BP-up table.
+#     Note: "regulation of synapse structure or activity" is the parent of
+#     "regulation of synapse organization" and carries the same 47 genes; it is
+#     part of the synaptic set, so both appear. Drop it here to de-duplicate.
 fig4a_go_bp_synaptic_up <- function() {
   p <- build_go_ora_barplot(
     c("GO_ORA_BP_synaptic_up.csv", "GO_ORA_BP_up.csv"),
     "Synaptic and axonal biological processes (up-regulated)",
     include_terms = c(
+      # the 6 significant terms of the synaptic GO:BP set
       "regulation of synapse organization",
+      "regulation of synapse structure or activity",
       "synapse assembly",
+      "neuromuscular junction development",
+      "postsynaptic modulation of chemical synaptic transmission",
+      "inhibitory synapse assembly",
+      # axonal terms cited in the text
       "axonogenesis",
-      "axon extension",
-      "inhibitory synapse assembly"))
-  save_figure(p, "fig4a_go_bp_synaptic_up", width = 8, height = 3.5)
+      "axon extension"))
+  save_figure(p, "fig4a_go_bp_synaptic_up", width = 8.5, height = 4)
 }
 
-# 4B. GO:CC compartments among up-regulated genes. Curated to the postsynaptic
-#     / dendritic compartment terms cited in the text.
+# 4B. GO:CC compartments among up-regulated genes -- all 15 significant terms
+#     (the postsynaptic / dendritic compartments cited in the text plus the
+#     matrix and basolateral-membrane compartments that come with them).
 fig4b_go_cc_up <- function() {
   p <- build_go_ora_barplot(
-    "GO_ORA_CC_up.csv", "Cellular compartments (up-regulated)",
-    include_terms = c(
-      "postsynaptic membrane",
-      "postsynaptic specialization membrane",
-      "Schaffer collateral - CA1 synapse",
-      "dendritic shaft",
-      "proximal dendrite"))
-  save_figure(p, "fig4b_go_cc_up", width = 8, height = 3.5)
+    "GO_ORA_CC_up.csv", "Cellular compartments (up-regulated)")
+  save_figure(p, "fig4b_go_cc_up", width = 8.5, height = 5.5)
 }
 
-# 4C. Down-regulated GO:BP + GO:CC. Curated to the coherent translation-at-
-#     synapse terms + cytosolic ribosome cited in the text.
+# 4C. Down-regulated GO:BP + GO:CC -- every significant term in both tables
+#     (5 BP + cytosolic ribosome): the translation-at-synapse terms and the
+#     cytosolic ribosome cited in the text, plus the two amine-catabolism terms.
 fig4c_go_down <- function() {
   p <- build_go_ora_barplot(
     c("GO_ORA_BP_down.csv", "GO_ORA_CC_down.csv"),
-    "Down-regulated processes and compartments",
-    include_terms = c(
-      "translation at synapse",
-      "translation at presynapse",
-      "translation at postsynapse",
-      "cytosolic ribosome"))
-  save_figure(p, "fig4c_go_down", width = 8, height = 2.6)
+    "Down-regulated processes and compartments")
+  save_figure(p, "fig4c_go_down", width = 8, height = 3.2)
 }
 
 # 4D. Paired GSEA curves: an up-regulated synaptic set beside the down-regulated
@@ -416,45 +464,79 @@ fig5a_go_bp_vascular_up <- function() {
   p <- build_go_ora_barplot(
     "GO_ORA_BP_up.csv", "Vascular / endothelial processes (up-regulated)",
     include_terms = c(
+      # cited in the text
       "endothelial cell migration",
       "blood vessel endothelial cell migration",
       "regulation of vasculature development",
       "regulation of angiogenesis",
       "sprouting angiogenesis",
       "endothelium development",
-      "establishment of endothelial barrier"))
-  save_figure(p, "fig5a_go_bp_vascular_up", width = 8.5, height = 4)
+      "establishment of endothelial barrier",
+      # remaining significant vascular / endothelial terms
+      "circulatory system process",
+      "vascular process in circulatory system",
+      "regulation of endothelial cell migration",
+      "blood vessel diameter maintenance",
+      "endothelial cell proliferation",
+      "regulation of endothelial cell proliferation",
+      "endothelial cell differentiation",
+      "regulation of blood vessel endothelial cell migration",
+      "negative regulation of angiogenesis",
+      "negative regulation of blood vessel morphogenesis",
+      "endothelial cell development",
+      "cell migration involved in sprouting angiogenesis"))
+  save_figure(p, "fig5a_go_bp_vascular_up", width = 9, height = 6.5)
 }
 
-# 5B. Adhesion / ECM signature: the GO:MF and GO:BP adhesion terms cited in
-#     the text (molecular functions + biological processes together).
+# 5B. Molecular functions among up-regulated genes: all 12 significant GO:MF
+#     terms (adhesion, integrin and ECM among them) plus the 3 GO:BP adhesion
+#     terms cited in the text, which live in the BP-up table.
 fig5b_go_mf_up <- function() {
   p <- build_go_ora_barplot(
     c("GO_ORA_MF_up.csv", "GO_ORA_BP_up.csv"),
-    "Adhesion and extracellular matrix (up-regulated)",
+    "Molecular functions and adhesion (up-regulated)",
     include_terms = c(
+      # all 12 significant GO:MF terms
       "cell adhesion molecule binding",
+      "signaling receptor regulator activity",
+      "peptide binding",
       "integrin binding",
+      "glycosaminoglycan binding",
       "extracellular matrix structural constituent",
+      "protein folding chaperone",
+      "cargo receptor activity",
+      "ATP-dependent protein folding chaperone",
+      "lipoprotein particle binding",
+      "protein-lipid complex binding",
+      "opsonin binding",
+      # GO:BP adhesion terms cited in the text
       "cell-substrate adhesion",
       "cell-cell adhesion via plasma-membrane adhesion molecules",
       "regulation of cell junction assembly"))
-  save_figure(p, "fig5b_go_mf_up", width = 8.5, height = 4)
+  save_figure(p, "fig5b_go_mf_up", width = 9, height = 5.5)
 }
 
-# 5C. Up-regulated cell-junction / adhesion / collagen canonical pathways (GSEA).
+# 5C. Canonical pathways, diverging NES: the 10 most positive and 10 most
+#     negative significant sets, plus every significant cell-junction /
+#     adhesion / collagen set (`include_pattern`) so the adhesion pathways cited
+#     in the text stay on the panel even when they fall outside the top 10.
 fig5c_canonical_gsea_nes <- function() {
   p <- build_gsea_nes_barplot(
-    "GSEA_cp_only.csv", "Cell junction / adhesion pathways (up-regulated, GSEA)",
-    pattern = "JUNCTION|ADHERENS|ADHESION|COLLAGEN", direction = "up")
-  save_figure(p, "fig5c_canonical_gsea_nes", width = 8.5, height = 4.5)
+    "GSEA_cp_only.csv", "Canonical pathways (GSEA)",
+    direction = "both", top_each = 10,
+    include_pattern = "JUNCTION|ADHERENS|ADHESION|COLLAGEN")
+  save_figure(p, "fig5c_canonical_gsea_nes", width = 9, height = 8)
 }
 
-# 5D. Interferon / inflammatory gene sets (GSEA), across collections.
+# 5D. Hallmark gene sets, diverging NES: all 24 significant Hallmark sets, plus
+#     the 3 non-Hallmark interferon / cytokine sets cited in the text (response
+#     to interferon beta, interferon signaling, cytokine signaling), which come
+#     from the immune theme table. Overlapping sets are de-duplicated.
 fig5d_hallmark_gsea_nes <- function() {
-  p <- build_gsea_nes_barplot("GSEA_theme_immune.csv",
-                              "Interferon / inflammatory gene sets (GSEA)")
-  save_figure(p, "fig5d_hallmark_gsea_nes", width = 8.5, height = 4)
+  p <- build_gsea_nes_barplot(
+    c("GSEA_hallmark.csv", "GSEA_theme_immune.csv"),
+    "Hallmark and interferon gene sets (GSEA)")
+  save_figure(p, "fig5d_hallmark_gsea_nes", width = 8.5, height = 8)
 }
 
 # =============================================================================
