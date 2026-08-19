@@ -432,13 +432,15 @@ fig4a_go_bp_synaptic_up <- function(save = TRUE) {
   p
 }
 
-# 4B. GO:CC compartments among up-regulated genes -- all 15 significant terms
+# 4B. GO:CC compartments among up-regulated genes -- the significant terms
 #     (the postsynaptic / dendritic compartments cited in the text plus the
 #     matrix and basolateral-membrane compartments that come with them).
+#     "Schaffer collateral - CA1 synapse" is excluded by request.
 fig4b_go_cc_up <- function(save = TRUE) {
   p <- build_go_ora_barplot(
-    "GO_ORA_CC_up.csv", "Cellular compartments (up-regulated)")
-  if (save) save_figure(p, "fig4b_go_cc_up", width = 8.5, height = 5.5)
+    "GO_ORA_CC_up.csv", "Cellular compartments (up-regulated)",
+    exclude = "^Schaffer collateral")
+  if (save) save_figure(p, "fig4b_go_cc_up", width = 8.5, height = 5.2)
   p
 }
 
