@@ -49,6 +49,9 @@ suppressPackageStartupMessages({
 DIR_PAPER_FIGS <- file.path(DIR_OUTPUT, "paper_figures")
 if (!dir.exists(DIR_PAPER_FIGS)) dir.create(DIR_PAPER_FIGS, recursive = TRUE)
 
+# GO ORA / GSEA result tables produced by strand 01 step 03.
+DIR_ENRICH <- file.path(DIR_OUTPUT, "01_bulk_rnaseq_DE", "03_enrichment", "tables")
+
 # Genotype fill colours come from 00_config.R (GENOTYPE_COLOURS), so the paper
 # figures and the pipeline figures share one palette. To recolour everything,
 # edit GENOTYPE_COLOURS in scripts/01_bulk_rnaseq_DE/00_config.R.
@@ -100,6 +103,106 @@ save_figure <- function(plot, name, width = 6.5, height = 4.5) {
       # keep the metadata's sample order (Control group first, then C4-OE)
       sample_label   = factor(sample_label, levels = d$metadata$sample_label)
     )
+}
+
+# =============================================================================
+# SHARED PLOT BUILDERS
+# =============================================================================
+# Each returns a ggplot (no file side effects) so panels can be saved on their
+# own or composed later. Styling mirrors the pipeline: GO ORA barplots follow
+# make_go_barplot() (blue->red p.adjust, theme_minimal); GSEA NES barplots
+# follow plot_gsea_top() (orangered->pink p.adjust, theme_bw).
+
+# Tidy an MSigDB-style pathway id for display: drop the collection prefix and
+# turn underscores into spaces.
+.clean_pathway <- function(x) {
+  x <- sub("^(HALLMARK|GOBP|GOCC|GOMF|REACTOME|WP|KEGG|BIOCARTA|PID)_", "", x)
+  tolower(gsub("_", " ", x))
+}
+
+# GO ORA barplot in make_go_barplot() style. Reads one or more GO ORA CSVs
+# (basenames under DIR_ENRICH), keeps significant terms (optionally matching
+# `pattern` in the Description), and plots the top `num_paths` by gene Count.
+build_go_ora_barplot <- function(files, title, pattern = NULL, num_paths = 20,
+                                 padj_threshold = PADJ_THRESHOLD) {
+  d <- do.call(rbind, lapply(files, function(f) {
+    p <- file.path(DIR_ENRICH, f)
+    if (!file.exists(p)) {
+      stop("GO ORA table not found:\n  ", p,
+           "\nRun strand 01 first: source(\"run_full_analysis.R\").", call. = FALSE)
+    }
+    read.csv(p, check.names = FALSE)[, c("Description", "Count", "p.adjust")]
+  }))
+  d <- d %>% filter(!is.na(p.adjust), p.adjust < padj_threshold)
+  if (!is.null(pattern)) d <- d %>% filter(grepl(pattern, Description, ignore.case = TRUE))
+  d <- d %>% distinct(Description, .keep_all = TRUE) %>%
+    arrange(desc(Count)) %>% head(num_paths)
+  if (nrow(d) == 0) stop("No significant GO terms for '", title, "'.", call. = FALSE)
+
+  ggplot(d, aes(x = reorder(Description, Count), y = Count, fill = p.adjust)) +
+    geom_bar(stat = "identity") +
+    scale_fill_gradient(low = "blue", high = "red", name = "p.adjust") +
+    coord_flip() +
+    labs(title = title, x = NULL, y = "Gene count") +
+    theme_minimal()
+}
+
+# GSEA NES barplot in plot_gsea_top() style. Reads a GSEA CSV, keeps significant
+# sets (optionally matching `pattern`), optionally taking the `top_each` most
+# extreme sets per direction, and plots NES coloured by padj.
+build_gsea_nes_barplot <- function(file, title, top_each = NULL, pattern = NULL,
+                                   padj_threshold = PADJ_THRESHOLD) {
+  d <- read.csv(file.path(DIR_ENRICH, file), check.names = FALSE) %>%
+    filter(!is.na(padj), padj < padj_threshold)
+  if (!is.null(pattern)) d <- d %>% filter(grepl(pattern, pathway, ignore.case = TRUE))
+  if (!is.null(top_each)) {
+    d <- bind_rows(
+      d %>% filter(NES > 0) %>% arrange(desc(NES)) %>% head(top_each),
+      d %>% filter(NES < 0) %>% arrange(NES)       %>% head(top_each)
+    )
+  }
+  if (nrow(d) == 0) stop("No significant gene sets for '", title, "'.", call. = FALSE)
+  d <- d %>% mutate(label = .clean_pathway(pathway))
+
+  ggplot(d, aes(x = reorder(label, NES), y = NES, fill = padj)) +
+    geom_bar(stat = "identity", width = 0.7) +
+    scale_fill_gradient(low = "orangered", high = "pink", name = "p.adjust") +
+    coord_flip() +
+    labs(title = title, x = NULL, y = "Normalized Enrichment Score (NES)") +
+    theme_bw(base_size = 9)
+}
+
+# DESeq2 Wald-statistic ranking used by GSEA (NA-padj genes dropped), as a named
+# decreasing numeric vector -- the `stats` argument to fgsea::plotEnrichment().
+.ranked_stats <- function() {
+  rt <- .load_deseq_cache()$results_table %>%
+    filter(!is.na(padj), !is.na(stat), !is.na(gene)) %>%
+    distinct(gene, .keep_all = TRUE)
+  stats <- rt$stat
+  names(stats) <- rt$gene
+  sort(stats, decreasing = TRUE)
+}
+
+# Genes of one pathway, read from the committed GMT for `collection`
+# (a name in GMT_FILES: hallmark, canonical_paths, cp_only, regulatory,
+# go_bp, cell_type).
+.gmt_pathway <- function(collection, pathway) {
+  if (!requireNamespace("fgsea", quietly = TRUE)) {
+    stop("Package 'fgsea' is required for enrichment-score curves.", call. = FALSE)
+  }
+  gp <- fgsea::gmtPathways(GMT_FILES[[collection]])
+  if (!pathway %in% names(gp)) {
+    stop("Pathway '", pathway, "' not found in collection '", collection, "'.", call. = FALSE)
+  }
+  gp[[pathway]]
+}
+
+# GSEA running-enrichment-score curve (fgsea::plotEnrichment) for one pathway.
+build_enrichment_curve <- function(collection, pathway, title = NULL) {
+  if (is.null(title)) title <- .clean_pathway(pathway)
+  fgsea::plotEnrichment(.gmt_pathway(collection, pathway), .ranked_stats()) +
+    labs(title = title, x = "Rank in ranked gene list", y = "Enrichment score (ES)") +
+    theme(plot.title = element_text(face = "bold", size = 10))
 }
 
 # =============================================================================
@@ -159,41 +262,130 @@ fig_c4_expression_box <- function(gene = "C4b", value = c("normalized", "vst")) 
               width = 4.2, height = 4.5)
 }
 
-# --- Cholesterol-related GO:BP terms enriched among UP-regulated genes --------
-# Horizontal barplot of the significant (p.adjust < PADJ_THRESHOLD) GO Biological
-# Process terms that match `pattern` (default cholesterol/sterol) in the
-# up-regulated ORA. Bars are drawn in the C4-OE colour (these processes go UP in
-# C4-OE), ranked by significance, and labelled with the number of genes.
+# --- FIGURE 3: cholesterol biosynthesis --------------------------------------
+
+# 3A. GSEA running enrichment-score curve for WP_CHOLESTEROL_BIOSYNTHESIS.
+fig3a_cholesterol_gsea_curve <- function() {
+  p <- build_enrichment_curve("cp_only", "WP_CHOLESTEROL_BIOSYNTHESIS",
+                              "WP cholesterol biosynthesis (GSEA)")
+  save_figure(p, "fig3a_cholesterol_gsea_curve", width = 6, height = 4.2)
+}
+
+# 3B. Cholesterol / sterol gene sets across collections; NES coloured by padj.
+fig3b_cholesterol_gsea_nes <- function() {
+  p <- build_gsea_nes_barplot("GSEA_theme_cholesterol_lipid.csv",
+                              "Cholesterol / sterol gene sets (GSEA)")
+  save_figure(p, "fig3b_cholesterol_gsea_nes", width = 8.5, height = 6)
+}
+
+# 3C. Cholesterol GO:BP terms among up-regulated genes (make_go_barplot style).
 fig_cholesterol_go_up <- function(pattern = "cholesterol|sterol") {
-  f <- file.path(DIR_OUTPUT, "01_bulk_rnaseq_DE", "03_enrichment",
-                 "tables", "GO_ORA_BP_up.csv")
-  if (!file.exists(f)) {
-    stop("Up-regulated GO:BP ORA table not found:\n  ", f,
-         "\nRun strand 01 first: source(\"run_full_analysis.R\").", call. = FALSE)
-  }
-
-  go <- read.csv(f, check.names = FALSE)
-  sig <- go %>%
-    filter(p.adjust < PADJ_THRESHOLD,
-           grepl(pattern, Description, ignore.case = TRUE))
-
-  if (nrow(sig) == 0) {
-    stop("No significant GO:BP terms matching '", pattern,
-         "' among up-regulated genes.", call. = FALSE)
-  }
-
-  # Built to match the pipeline's make_go_barplot() exactly -- same aesthetics,
-  # geom, blue-to-red p.adjust scale, coord_flip() and theme_minimal() -- so
-  # this panel is visually identical to the other GO barplots.
-  p <- ggplot(sig, aes(x = reorder(Description, Count), y = Count, fill = p.adjust)) +
-    geom_bar(stat = "identity") +
-    scale_fill_gradient(low = "blue", high = "red", name = "p.adjust") +
-    coord_flip() +
-    labs(title = "Cholesterol-related biological processes (up-regulated genes)",
-         x = NULL, y = "Gene count") +
-    theme_minimal()
-
+  p <- build_go_ora_barplot(
+    "GO_ORA_BP_up.csv",
+    "Cholesterol-related biological processes (up-regulated genes)",
+    pattern = pattern)
   save_figure(p, "fig_cholesterol_go_up", width = 8.5, height = 4.5)
+}
+
+# 3D. WP cholesterol biosynthesis genes as a lollipop by log2 fold change.
+#     To make the "spans the whole pathway" point, pass `gene_order` with the
+#     genes in biosynthetic-pathway order instead of the default logFC order.
+fig3d_wp_cholesterol_lollipop <- function(gene_order = NULL) {
+  d     <- .load_deseq_cache()
+  genes <- .gmt_pathway("cp_only", "WP_CHOLESTEROL_BIOSYNTHESIS")
+  df <- d$results_table %>%
+    filter(gene %in% genes, !is.na(logFC)) %>%
+    mutate(significant = !is.na(padj) & padj < PADJ_THRESHOLD)
+  if (is.null(gene_order)) {
+    df <- df %>% arrange(logFC) %>% mutate(gene = factor(gene, levels = gene))
+  } else {
+    df <- df %>% filter(gene %in% gene_order) %>%
+      mutate(gene = factor(gene, levels = rev(gene_order)))
+  }
+
+  p <- ggplot(df, aes(x = logFC, y = gene)) +
+    geom_segment(aes(xend = 0, yend = gene), colour = "grey65") +
+    geom_point(aes(fill = significant), shape = 21, size = 3, colour = "black") +
+    scale_fill_manual(values = c(`TRUE` = GENOTYPE_COLOURS[["C4-OE"]], `FALSE` = "grey80"),
+                      labels = c(`TRUE` = "padj < 0.05", `FALSE` = "n.s."), name = NULL) +
+    geom_vline(xintercept = 0, linewidth = 0.3) +
+    labs(title = "WP cholesterol biosynthesis genes",
+         x = "log2 fold change (C4-OE vs Control)", y = NULL) +
+    theme_minimal()
+  save_figure(p, "fig3d_wp_cholesterol_lollipop", width = 6, height = 5)
+}
+
+# --- FIGURE 4: synaptic directional split ------------------------------------
+
+# 4A. Synaptic GO:BP terms among up-regulated genes.
+fig4a_go_bp_synaptic_up <- function() {
+  p <- build_go_ora_barplot("GO_ORA_BP_synaptic_up.csv",
+                            "Synaptic biological processes (up-regulated)")
+  save_figure(p, "fig4a_go_bp_synaptic_up", width = 8, height = 3.5)
+}
+
+# 4B. GO:CC compartments among up-regulated genes.
+fig4b_go_cc_up <- function() {
+  p <- build_go_ora_barplot("GO_ORA_CC_up.csv",
+                            "Cellular compartments (up-regulated)")
+  save_figure(p, "fig4b_go_cc_up", width = 8, height = 5)
+}
+
+# 4C. Down-regulated GO:BP + GO:CC (the translation / compartment contrast).
+fig4c_go_down <- function() {
+  p <- build_go_ora_barplot(c("GO_ORA_BP_down.csv", "GO_ORA_CC_down.csv"),
+                            "Down-regulated processes and compartments")
+  save_figure(p, "fig4c_go_down", width = 8, height = 3)
+}
+
+# 4D. Paired GSEA curves: an up-regulated synaptic set beside the down-regulated
+#     synaptic-translation set. Both GO:BP; swap via the arguments.
+fig4d_synaptic_gsea_curves <- function(
+    up_pathway   = "GOBP_RECEPTOR_LOCALIZATION_TO_SYNAPSE",
+    down_pathway = "GOBP_TRANSLATION_AT_SYNAPSE") {
+  up   <- build_enrichment_curve("go_bp", up_pathway)
+  down <- build_enrichment_curve("go_bp", down_pathway)
+  combined <- if (requireNamespace("patchwork", quietly = TRUE)) {
+    patchwork::wrap_plots(up, down, ncol = 2)
+  } else if (requireNamespace("cowplot", quietly = TRUE)) {
+    cowplot::plot_grid(up, down, ncol = 2)
+  } else {
+    stop("Package 'patchwork' or 'cowplot' is required to pair the curves.", call. = FALSE)
+  }
+  save_figure(combined, "fig4d_synaptic_gsea_curves", width = 10, height = 4.2)
+}
+
+# --- FIGURE 5: vascular, adhesion, and rank-based findings --------------------
+
+# 5A. Vascular / endothelial GO:BP terms among up-regulated genes.
+fig5a_go_bp_vascular_up <- function() {
+  p <- build_go_ora_barplot(
+    "GO_ORA_BP_up.csv",
+    "Vascular / endothelial processes (up-regulated)",
+    pattern = "vascul|angiogen|endotheli|blood vessel|sprouting",
+    num_paths = 12)
+  save_figure(p, "fig5a_go_bp_vascular_up", width = 8.5, height = 5)
+}
+
+# 5B. GO:MF among up-regulated genes (adhesion, integrin, ECM).
+fig5b_go_mf_up <- function() {
+  p <- build_go_ora_barplot("GO_ORA_MF_up.csv",
+                            "Molecular functions (up-regulated): adhesion, ECM")
+  save_figure(p, "fig5b_go_mf_up", width = 8.5, height = 4.5)
+}
+
+# 5C. Canonical pathways (GSEA), diverging NES, top 10 per direction.
+fig5c_canonical_gsea_nes <- function() {
+  p <- build_gsea_nes_barplot("GSEA_cp_only.csv",
+                              "Canonical pathways (GSEA, top 10 per direction)",
+                              top_each = 10)
+  save_figure(p, "fig5c_canonical_gsea_nes", width = 9, height = 6.5)
+}
+
+# 5D. Hallmark gene sets (GSEA), all significant, diverging NES.
+fig5d_hallmark_gsea_nes <- function() {
+  p <- build_gsea_nes_barplot("GSEA_hallmark.csv", "Hallmark gene sets (GSEA)")
+  save_figure(p, "fig5d_hallmark_gsea_nes", width = 8.5, height = 6)
 }
 
 # =============================================================================
@@ -205,7 +397,24 @@ fig_cholesterol_go_up <- function(pattern = "cholesterol|sterol") {
 PAPER_FIGURES <- list(
   c4_expression      = function() fig_c4_expression(gene = "C4b", value = "normalized"),
   c4_expression_box  = function() fig_c4_expression_box(gene = "C4b", value = "normalized"),
-  cholesterol_go_up  = function() fig_cholesterol_go_up()
+
+  # Figure 3 -- cholesterol biosynthesis (3C = cholesterol_go_up)
+  fig3a_cholesterol_gsea_curve  = fig3a_cholesterol_gsea_curve,
+  fig3b_cholesterol_gsea_nes    = fig3b_cholesterol_gsea_nes,
+  cholesterol_go_up             = function() fig_cholesterol_go_up(),
+  fig3d_wp_cholesterol_lollipop = fig3d_wp_cholesterol_lollipop,
+
+  # Figure 4 -- synaptic directional split
+  fig4a_go_bp_synaptic_up    = fig4a_go_bp_synaptic_up,
+  fig4b_go_cc_up             = fig4b_go_cc_up,
+  fig4c_go_down              = fig4c_go_down,
+  fig4d_synaptic_gsea_curves = fig4d_synaptic_gsea_curves,
+
+  # Figure 5 -- vascular, adhesion, rank-based
+  fig5a_go_bp_vascular_up  = fig5a_go_bp_vascular_up,
+  fig5b_go_mf_up           = fig5b_go_mf_up,
+  fig5c_canonical_gsea_nes = fig5c_canonical_gsea_nes,
+  fig5d_hallmark_gsea_nes  = fig5d_hallmark_gsea_nes
 )
 
 if (!exists("FIGURES_TO_MAKE")) FIGURES_TO_MAKE <- "all"
