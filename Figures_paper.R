@@ -295,6 +295,7 @@ fig_cholesterol_go_up <- function() {
     "GO_ORA_BP_up.csv",
     "Cholesterol-related biological processes (up-regulated genes)",
     include_terms = c(
+      "cholesterol biosynthetic process",
       "cholesterol biosynthetic process via desmosterol",
       "cholesterol biosynthetic process via lathosterol",
       "zymosterol biosynthetic process",
