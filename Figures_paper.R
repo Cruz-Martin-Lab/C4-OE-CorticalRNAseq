@@ -288,30 +288,32 @@ fig_cholesterol_go_up <- function(pattern = "cholesterol|sterol") {
 }
 
 # 3D. WP cholesterol biosynthesis genes as a lollipop by log2 fold change.
-#     To make the "spans the whole pathway" point, pass `gene_order` with the
-#     genes in biosynthetic-pathway order instead of the default logFC order.
-fig3d_wp_cholesterol_lollipop <- function(gene_order = NULL) {
+#     Reproduces the pipeline's plot_pathway_lollipop() exactly: coloured by
+#     significance (red/blue), point size by |logFC|, genes ordered by logFC.
+fig3d_wp_cholesterol_lollipop <- function() {
   d     <- .load_deseq_cache()
   genes <- .gmt_pathway("cp_only", "WP_CHOLESTEROL_BIOSYNTHESIS")
   df <- d$results_table %>%
-    filter(gene %in% genes, !is.na(logFC)) %>%
-    mutate(significant = !is.na(padj) & padj < PADJ_THRESHOLD)
-  if (is.null(gene_order)) {
-    df <- df %>% arrange(logFC) %>% mutate(gene = factor(gene, levels = gene))
-  } else {
-    df <- df %>% filter(gene %in% gene_order) %>%
-      mutate(gene = factor(gene, levels = rev(gene_order)))
-  }
+    filter(gene %in% genes, !is.na(logFC), !is.na(padj)) %>%
+    mutate(Significance = factor(
+      ifelse(padj < PADJ_THRESHOLD, "Significant", "Not Significant"),
+      levels = c("Not Significant", "Significant"))) %>%
+    arrange(logFC)
+  df$gene_f <- factor(df$gene, levels = df$gene)   # ascending -> largest at top
 
-  p <- ggplot(df, aes(x = logFC, y = gene)) +
-    geom_segment(aes(xend = 0, yend = gene), colour = "grey65") +
-    geom_point(aes(fill = significant), shape = 21, size = 3, colour = "black") +
-    scale_fill_manual(values = c(`TRUE` = GENOTYPE_COLOURS[["C4-OE"]], `FALSE` = "grey80"),
-                      labels = c(`TRUE` = "padj < 0.05", `FALSE` = "n.s."), name = NULL) +
-    geom_vline(xintercept = 0, linewidth = 0.3) +
-    labs(title = "WP cholesterol biosynthesis genes",
-         x = "log2 fold change (C4-OE vs Control)", y = NULL) +
-    theme_minimal()
+  p <- ggplot(df, aes(x = logFC, y = gene_f)) +
+    geom_vline(xintercept = 0, color = "grey70", linewidth = 0.4) +
+    geom_segment(aes(x = 0, xend = logFC, y = gene_f, yend = gene_f,
+                     color = Significance), linewidth = 0.5) +
+    geom_point(aes(color = Significance, size = abs(logFC))) +
+    scale_color_manual(values = c("Significant" = "red", "Not Significant" = "blue"),
+                       name = "Significance") +
+    scale_size_continuous(name = "|LogFC|", range = c(1.5, 5)) +
+    labs(title = "WP Cholesterol Biosynthesis Genes",
+         x = expression(Log[2] ~ "Fold Change (LogFC)"), y = NULL) +
+    theme_classic(base_size = 11) +
+    theme(plot.title = element_text(face = "bold", hjust = 0.5),
+          axis.text.y = element_text(size = 9))
   save_figure(p, "fig3d_wp_cholesterol_lollipop", width = 6, height = 5)
 }
 
