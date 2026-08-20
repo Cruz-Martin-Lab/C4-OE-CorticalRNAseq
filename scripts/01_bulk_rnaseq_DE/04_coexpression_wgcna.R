@@ -9,7 +9,8 @@
 #   figures/wgcna_soft_threshold.pdf
 #   figures/wgcna_dendrogram.pdf
 #   figures/wgcna_module_sizes.pdf
-#   figures/wgcna_module_eigengene_heatmap.pdf
+#   figures/wgcna_module_eigengene_heatmap.pdf            largest N modules
+#   figures/wgcna_module_eigengene_heatmap_all_modules.pdf every module
 #   figures/GO_ORA_module_<color>_barplot.pdf  per top module WITH significant terms
 #   tables/wgcna_soft_threshold_scan.csv
 #   tables/wgcna_module_assignments.csv
@@ -63,27 +64,32 @@ DIR_FIGURES <- step_dir("04", "figures")
 deseq_cached <- readRDS(file.path(DIR_RDATA, "02_deseq2_results.rds"))
 results_table <- deseq_cached$results_table
 vst_matrix    <- deseq_cached$vst_matrix
+norm_counts   <- deseq_cached$norm_counts
 metadata      <- deseq_cached$metadata
 
 # ---- 1. Prepare input matrix (samples in rows, genes in columns) -----------
 WGCNA::allowWGCNAThreads(4)
 
-# Restrict to genes DESeq2 was able to test (non-NA padj). Roughly 31% of the
-# matrix (7,065 of 22,761 genes) is low-count material that DESeq2's own
-# independent filtering discarded as too unreliable to test. Those genes still
-# have VST values, but their sample-to-sample variation is mostly sampling
-# noise -- and WGCNA builds modules purely from correlation structure, so
-# feeding them in creates modules of co-fluctuating noise that compete with
-# real biology and distort the soft-threshold scan. Filtering here is the
-# co-expression equivalent of the ranking/threshold fixes applied in
-# script 03.
-testable_genes <- results_table %>%
-  dplyr::filter(!is.na(padj)) %>%
-  dplyr::pull(gene)
+# Restrict to adequately expressed genes. Roughly a third of the matrix is
+# low-count material whose sample-to-sample variation is mostly sampling noise
+# -- and WGCNA builds modules purely from correlation structure, so feeding
+# those genes in creates modules of co-fluctuating noise that compete with real
+# biology and distort the soft-threshold scan.
+#
+# The cutoff is the MEAN NORMALIZED COUNT (WGCNA_MIN_MEAN_COUNT in 00_config.R),
+# computed from the normalized count matrix alone. It is deliberately NOT the
+# "genes DESeq2 could test" set: filtering WGCNA input by anything derived from
+# the differential expression model is discouraged, because the network should
+# be built without reference to the trait. This criterion never sees genotype,
+# p-values, or any model output, so the modules below are genuinely unsupervised.
+count_mat <- as.matrix(norm_counts[, setdiff(names(norm_counts), "gene")])
+rownames(count_mat) <- norm_counts$gene
+mean_norm_count <- rowMeans(count_mat)
+expressed_genes <- names(mean_norm_count)[mean_norm_count >= WGCNA_MIN_MEAN_COUNT]
 
-vst_filtered <- vst_matrix[rownames(vst_matrix) %in% testable_genes, , drop = FALSE]
-message(sprintf("WGCNA input: %d of %d genes retained (DESeq2-testable, non-NA padj).",
-                 nrow(vst_filtered), nrow(vst_matrix)))
+vst_filtered <- vst_matrix[rownames(vst_matrix) %in% expressed_genes, , drop = FALSE]
+message(sprintf("WGCNA input: %d of %d genes retained (mean normalized count >= %g).",
+                 nrow(vst_filtered), nrow(vst_matrix), WGCNA_MIN_MEAN_COUNT))
 
 wgcna_input <- prepare_wgcna_matrix(vst_filtered)
 
@@ -152,7 +158,14 @@ gridExtra::grid.arrange(sft_plots$scale_independence, sft_plots$mean_connectivit
 dev.off()
 
 # ---- 3. Module detection -----------------------------------------------------
-net <- run_wgcna_modules(wgcna_input, power = picked_power)
+# Module resolution comes from 00_config.R (WGCNA_MIN_MODULE_SIZE,
+# WGCNA_MERGE_CUT_HEIGHT), set coarser than WGCNA's defaults for this sample
+# size. Both criteria are blind to the genotype labels.
+net <- run_wgcna_modules(wgcna_input, power = picked_power,
+                          min_module_size = WGCNA_MIN_MODULE_SIZE,
+                          merge_cut_height = WGCNA_MERGE_CUT_HEIGHT)
+message(sprintf("  -> minModuleSize = %d, mergeCutHeight = %.2f",
+                 WGCNA_MIN_MODULE_SIZE, WGCNA_MERGE_CUT_HEIGHT))
 module_colors <- WGCNA::labels2colors(net$colors)
 
 pdf(file.path(DIR_FIGURES, "wgcna_dendrogram.pdf"), width = 9, height = 5)
@@ -199,12 +212,37 @@ annotation_col <- data.frame(
 )
 rownames(annotation_col) <- display_sample(sample_ids)
 
-pdf(file.path(DIR_FIGURES, "wgcna_module_eigengene_heatmap.pdf"), width = 8, height = 10)
+me_palette <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "RdBu")))(100)
+
+# The complete heatmap, written for the record so no module is hidden.
+pdf(file.path(DIR_FIGURES, "wgcna_module_eigengene_heatmap_all_modules.pdf"),
+    width = 8, height = max(6, 0.16 * nrow(me_mat) + 3))
 pheatmap::pheatmap(me_mat,
                     annotation_col = annotation_col,
-                    color = colorRampPalette(rev(RColorBrewer::brewer.pal(9, "RdBu")))(100),
-                    main = "Module eigengenes (z-scored)")
+                    color = me_palette,
+                    main = sprintf("Module eigengenes (z-scored)\nall %d modules",
+                                    nrow(me_mat)))
 dev.off()
+
+# The manuscript panel: the largest WGCNA_HEATMAP_N_MODULES modules only. At
+# this sample size the small modules are the least robust, and plotting every
+# one makes the panel unreadable. Grey is the unassigned-gene bin, not a
+# module, so it is excluded. The title states what is shown out of what.
+modules_ranked <- setdiff(as.character(module_sizes$Module), "grey")
+me_top         <- paste0("ME", head(modules_ranked, WGCNA_HEATMAP_N_MODULES))
+me_top         <- me_top[me_top %in% rownames(me_mat)]
+me_mat_top     <- me_mat[me_top, , drop = FALSE]
+
+pdf(file.path(DIR_FIGURES, "wgcna_module_eigengene_heatmap.pdf"),
+    width = 8, height = max(4.5, 0.42 * nrow(me_mat_top) + 2.5))
+pheatmap::pheatmap(me_mat_top,
+                    annotation_col = annotation_col,
+                    color = me_palette,
+                    main = sprintf("Module eigengenes (z-scored)\n%d largest of %d modules (grey excluded)",
+                                    nrow(me_mat_top), length(modules_ranked)))
+dev.off()
+message(sprintf("  -> eigengene heatmap: %d of %d modules shown (grey excluded)",
+                 nrow(me_mat_top), length(modules_ranked)))
 
 # ---- 4b. Module-trait relationships -----------------------------------------
 # The central WGCNA output for a designed experiment: correlate each module

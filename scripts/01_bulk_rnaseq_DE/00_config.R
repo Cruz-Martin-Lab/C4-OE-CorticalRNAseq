@@ -184,10 +184,39 @@ WGCNA_POWER       <- 18
 WGCNA_RSQ_CUTOFF  <- 0.90
 
 # Number of largest modules to annotate with GO ORA (grey, the unassigned
-# bin, is always excluded and does not count toward this total). Set to 8 so
-# that `pink` -- the module most strongly correlated with genotype in this
-# dataset (r = -0.922) but only the 8th largest -- is included.
+# bin, is always excluded and does not count toward this total).
 WGCNA_N_TOP_MODULES <- 8
+
+# Minimum mean normalized count for a gene to enter the WGCNA network. This is
+# a plain low-expression cutoff computed from the normalized counts alone: it
+# never looks at genotype, at p-values, or at any DESeq2 model output, so the
+# co-expression network is built on an input set chosen independently of the
+# differential expression result. (Filtering WGCNA input by differential
+# expression is strongly discouraged -- it collapses the correlation structure
+# into a single trait-driven module. Filtering by low expression is standard
+# and recommended.) At 20 the retained set is a superset of the genes DESeq2
+# was able to test, so nothing that was previously analysed is lost.
+WGCNA_MIN_MEAN_COUNT <- 20
+
+# ---- WGCNA module resolution -----------------------------------------------
+# These two set how finely the co-expression tree is cut into modules. A large
+# minimum module size is appropriate for the sample size of this experiment
+# (n = 8): with 8 samples every gene-gene correlation rests on 8 points, so
+# fine module boundaries are not supported by the data. WGCNA's own default
+# (minModuleSize 30) splits these data into 73 modules, most of them small and
+# interleaved rather than forming clean contiguous blocks.
+#
+# Both criteria are computed from the expression correlation structure ALONE
+# and never see the genotype labels, so changing them cannot bias the
+# module-trait comparison -- it only changes the resolution at which modules
+# are defined. Report the values used in the methods.
+WGCNA_MERGE_CUT_HEIGHT <- 0.25   # merge modules whose eigengenes correlate > 0.75
+WGCNA_MIN_MODULE_SIZE  <- 200    # smallest module retained, in genes
+
+# Number of modules drawn in the manuscript eigengene heatmap (largest first,
+# grey excluded). The full set is written alongside it as a separate file, so
+# nothing is hidden -- this only keeps the manuscript panel readable.
+WGCNA_HEATMAP_N_MODULES <- 10
 
 # ---- Analysis thresholds ---------------------------------------------------
 PADJ_THRESHOLD  <- 0.05
