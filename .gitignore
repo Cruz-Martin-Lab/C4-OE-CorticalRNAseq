@@ -47,3 +47,6 @@ package-lock.json
 CLAUDE.md
 HANDOFF.md
 reports/
+
+# local archive, not part of the analysis
+scripts.zip

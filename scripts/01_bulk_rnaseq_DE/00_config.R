@@ -166,26 +166,22 @@ SYNAPTIC_GO_BP_ROOTS <- c(
 # Set WGCNA_POWER to a number to use it directly, or to NULL to auto-select
 # (first power whose SIGNED R^2 reaches WGCNA_RSQ_CUTOFF, falling back to the
 # WGCNA authors' sample-size recommendation if none does).
-#
-# Why 18 for this dataset: the soft-threshold scan on these 8 samples never
-# reaches the conventional R^2 = 0.9 anywhere in powers 1-20 -- it plateaus at
-# roughly 0.85-0.89 from power ~16 onward. Langfelder & Horvath's guidance for
-# exactly this situation (no power attains the cutoff) is to use a default
-# based on sample number and network type; for a SIGNED network with fewer
-# than 20 samples that default is 18. At power 18 the signed R^2 is ~0.87 and
-# the curve has flattened, so it sits on the plateau rather than on the steep
-# part of the curve.
-#
-# For comparison, power 12 gives a signed R^2 of only ~0.78 -- below even the
-# more permissive 0.8 threshold, and still on the rising part of the curve.
-# Re-running with WGCNA_POWER <- 12 is worthwhile as a sensitivity check;
-# module assignments should be compared rather than assumed identical.
-WGCNA_POWER       <- 18
+# 15 is the partition most representative of powers 12-18 and clears the
+# R^2 = 0.8 scale-free threshold (see the Step 4 report, parameter selection).
+WGCNA_POWER       <- 15
 WGCNA_RSQ_CUTOFF  <- 0.90
 
-# Number of largest modules to annotate with GO ORA (grey, the unassigned
-# bin, is always excluded and does not count toward this total).
-WGCNA_N_TOP_MODULES <- 8
+# Powers compared by 04b_wgcna_power_sensitivity.R. WGCNA_POWER should be one
+# of them, and is used as the reference partition.
+WGCNA_SENSITIVITY_POWERS <- 12:18
+
+# How many of the largest modules to annotate with GO ORA (grey, the
+# unassigned bin, is always excluded and never counts toward this total).
+# NULL annotates EVERY module, which is the right default at this module
+# resolution: there are few enough modules to profile them all, and capping
+# the list by size can leave a strongly trait-associated module unannotated
+# simply because it is small.
+WGCNA_N_TOP_MODULES <- NULL
 
 # Minimum mean normalized count for a gene to enter the WGCNA network. This is
 # a plain low-expression cutoff computed from the normalized counts alone: it
@@ -199,19 +195,17 @@ WGCNA_N_TOP_MODULES <- 8
 WGCNA_MIN_MEAN_COUNT <- 20
 
 # ---- WGCNA module resolution -----------------------------------------------
-# These two set how finely the co-expression tree is cut into modules. A large
-# minimum module size is appropriate for the sample size of this experiment
-# (n = 8): with 8 samples every gene-gene correlation rests on 8 points, so
-# fine module boundaries are not supported by the data. WGCNA's own default
-# (minModuleSize 30) splits these data into 73 modules, most of them small and
-# interleaved rather than forming clean contiguous blocks.
-#
-# Both criteria are computed from the expression correlation structure ALONE
-# and never see the genotype labels, so changing them cannot bias the
-# module-trait comparison -- it only changes the resolution at which modules
-# are defined. Report the values used in the methods.
+# How finely the co-expression tree is cut into modules. Both criteria are
+# computed from the expression correlation structure alone and never see the
+# genotype labels.
 WGCNA_MERGE_CUT_HEIGHT <- 0.25   # merge modules whose eigengenes correlate > 0.75
 WGCNA_MIN_MODULE_SIZE  <- 200    # smallest module retained, in genes
+
+# Module-theme dot plot: how many modules to show (by number of significant GO
+# terms; modules surviving BH correction for genotype are always included), and
+# how many terms per module.
+WGCNA_DOTPLOT_N_MODULES <- 10
+WGCNA_DOTPLOT_N_TERMS   <- 3
 
 # Number of modules drawn in the manuscript eigengene heatmap (largest first,
 # grey excluded). The full set is written alongside it as a separate file, so

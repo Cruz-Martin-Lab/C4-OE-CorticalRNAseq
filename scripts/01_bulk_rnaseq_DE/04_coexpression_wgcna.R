@@ -159,8 +159,7 @@ dev.off()
 
 # ---- 3. Module detection -----------------------------------------------------
 # Module resolution comes from 00_config.R (WGCNA_MIN_MODULE_SIZE,
-# WGCNA_MERGE_CUT_HEIGHT), set coarser than WGCNA's defaults for this sample
-# size. Both criteria are blind to the genotype labels.
+# WGCNA_MERGE_CUT_HEIGHT).
 net <- run_wgcna_modules(wgcna_input, power = picked_power,
                           min_module_size = WGCNA_MIN_MODULE_SIZE,
                           merge_cut_height = WGCNA_MERGE_CUT_HEIGHT)
@@ -284,8 +283,13 @@ message(sprintf(
 all_tested_genes <- results_table %>% dplyr::filter(!is.na(padj)) %>% dplyr::pull(gene)
 # Profile the N largest real modules. "grey" is excluded first rather than
 # subtracted afterwards, so excluding it never silently reduces the count.
-n_top <- if (exists("WGCNA_N_TOP_MODULES")) WGCNA_N_TOP_MODULES else 8
-top_modules <- head(setdiff(module_sizes$Module, "grey"), n_top)
+real_modules <- setdiff(as.character(module_sizes$Module), "grey")
+n_top <- if (!exists("WGCNA_N_TOP_MODULES") || is.null(WGCNA_N_TOP_MODULES)) {
+  length(real_modules)          # NULL => annotate every module
+} else {
+  WGCNA_N_TOP_MODULES
+}
+top_modules <- head(real_modules, n_top)
 message(sprintf("Annotating the %d largest modules: %s",
                  length(top_modules), paste(top_modules, collapse = ", ")))
 
@@ -312,5 +316,78 @@ for (mod in top_modules) {
 # ---- 6. Cache -----------------------------------------------------------------
 saveRDS(list(net = net, module_df = module_df, MEs = MEs, picked_power = picked_power),
         file.path(DIR_RDATA, "04_wgcna_results.rds"))
+
+
+# ---- 6. Supplementary tables + module-theme dot plot -------------------------
+# One row per significant GO term per module, so the per-module CSVs do not have
+# to be read separately.
+go_all <- do.call(rbind, lapply(top_modules, function(mod) {
+  f <- file.path(DIR_TABLES, sprintf("GO_ORA_module_%s.csv", mod))
+  if (!file.exists(f)) return(NULL)
+  d <- read.csv(f)
+  d <- d[!is.na(d$p.adjust) & d$p.adjust < PADJ_THRESHOLD, , drop = FALSE]
+  if (!nrow(d)) return(NULL)
+  data.frame(module = mod, d[, c("ID", "Description", "GeneRatio", "Count",
+                                  "pvalue", "p.adjust", "geneID")],
+             stringsAsFactors = FALSE)
+}))
+go_all <- go_all[order(go_all$module, go_all$p.adjust), ]
+write.csv(go_all, file.path(DIR_TABLES, "GO_ORA_modules_combined.csv"), row.names = FALSE)
+message(sprintf("  -> combined GO table: %d significant terms across %d modules",
+                 nrow(go_all), length(unique(go_all$module))))
+
+# One row per module: size, genotype correlation, and GO summary. 04b adds a
+# `stability` column to this file when it runs.
+n_sig <- vapply(module_sizes$Module, function(m) sum(go_all$module == m), 0L)
+top_terms <- vapply(module_sizes$Module, function(m) {
+  d <- go_all[go_all$module == m, ]
+  if (!nrow(d)) "" else paste(utils::head(d$Description[order(d$p.adjust)], 3), collapse = "; ")
+}, "")
+mod_summary <- data.frame(
+  module = as.character(module_sizes$Module),
+  genes  = as.integer(module_sizes$Gene_Count),
+  n_sig_GO = as.integer(n_sig), top_GO_terms = top_terms, stringsAsFactors = FALSE)
+mt_join <- module_trait[, intersect(names(module_trait),
+             c("module","cor_genotype","p_genotype","padj_genotype","cor_sex","p_sex"))]
+mod_summary <- merge(mod_summary, mt_join, by = "module", all.x = TRUE)
+mod_summary <- mod_summary[order(-mod_summary$genes), ]
+write.csv(mod_summary, file.path(DIR_TABLES, "wgcna_module_summary.csv"), row.names = FALSE)
+
+# Dot plot: the modules worth naming, each with its strongest GO terms. A term
+# is drawn in every displayed module where it is significant, so the panel also
+# shows how module-specific each theme is.
+if (nrow(go_all)) {
+  by_count <- names(sort(tapply(go_all$module, go_all$module, length), decreasing = TRUE))
+  always   <- mod_summary$module[!is.na(mod_summary$padj_genotype) &
+                                   mod_summary$padj_genotype < PADJ_THRESHOLD]
+  show_mods <- unique(c(utils::head(by_count, WGCNA_DOTPLOT_N_MODULES),
+                        intersect(always, unique(go_all$module))))
+  show_mods <- by_count[by_count %in% show_mods]          # keep the ranking order
+  terms <- unique(unlist(lapply(show_mods, function(m) {
+    d <- go_all[go_all$module == m, ]
+    utils::head(d$Description[order(d$p.adjust)], WGCNA_DOTPLOT_N_TERMS)
+  })))
+  dp <- go_all[go_all$module %in% show_mods & go_all$Description %in% terms, ]
+  # Wrap long term names so one verbose GO description cannot squeeze the panel.
+  wrap_term <- function(x) vapply(x, function(z)
+    paste(strwrap(z, width = 42), collapse = "\n"), "")
+  terms_w <- wrap_term(terms)
+  dp$module      <- factor(dp$module, levels = show_mods)
+  dp$Description <- factor(wrap_term(as.character(dp$Description)), levels = rev(terms_w))
+  p_dot <- ggplot2::ggplot(dp, ggplot2::aes(x = module, y = Description,
+                                             size = Count, colour = -log10(p.adjust))) +
+    ggplot2::geom_point() +
+    ggplot2::scale_colour_gradient(low = "steelblue", high = "firebrick",
+                                    name = expression(-log[10] ~ "p.adjust")) +
+    ggplot2::scale_size_continuous(name = "Genes", range = c(1.5, 6)) +
+    ggplot2::labs(title = "Module GO biological process enrichment",
+                   x = NULL, y = NULL) +
+    ggplot2::theme_bw(base_size = 9) +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+                    panel.grid.major = ggplot2::element_line(colour = "grey92"))
+  ggplot2::ggsave(file.path(DIR_FIGURES, "wgcna_module_theme_dotplot.pdf"), p_dot,
+                   width = 8.5, height = max(5, 0.3 * length(terms) + 2.2), limitsize = FALSE)
+  message(sprintf("  -> dot plot: %d modules x %d terms", length(show_mods), length(terms)))
+}
 
 message("04_coexpression_wgcna.R complete.")

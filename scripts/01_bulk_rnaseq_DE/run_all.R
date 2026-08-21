@@ -42,6 +42,11 @@
 }
 SCRIPT_DIR <- .get_script_dir()
 
+# 04b_wgcna_power_sensitivity.R is deliberately NOT in this list: it rebuilds
+# the co-expression network at every power in WGCNA_SENSITIVITY_POWERS and takes
+# far longer than the rest of the pipeline combined. Run it on its own when the
+# WGCNA parameters change:
+#   source("scripts/01_bulk_rnaseq_DE/04b_wgcna_power_sensitivity.R")
 steps <- c(
   "01_load_data_and_infer_sex.R",
   "02_differential_expression_deseq2.R",
