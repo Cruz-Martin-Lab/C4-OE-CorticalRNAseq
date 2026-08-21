@@ -803,7 +803,7 @@ build_wgcna_module_dotplot <- function(n_modules = 8, n_terms = 2,
       panel.grid.major = element_line(colour = "grey92"))
 }
 
-# S3 Fig in the manuscript -- supplementary, not a Figure 6 panel.
+# S4 Fig in the manuscript -- supplementary, not a Figure 6 panel.
 # Base graphics: returns the draw function, and saving goes through
 # save_base_figure() rather than ggsave().
 figs3_gene_dendrogram <- function(save = TRUE) {
@@ -842,22 +842,26 @@ MAIN_FIG_NAMES <- c(
   dotplot    = "Fig6B_WGCNA_module_theme_dotplot",
   composite  = "Fig6_WGCNA_modules")
 
+# Numbered by order of FIRST CITATION in the Results text, which is:
+#   S2 soft-threshold scan -> S3 power sensitivity -> S4 dendrogram -> S5 module sizes
 SUPP_FIG_NAMES <- c(
   soft_threshold = "S2_Fig_WGCNA_soft_threshold",
-  dendrogram     = "S3_Fig_WGCNA_gene_dendrogram",
-  module_sizes   = "S4_Fig_WGCNA_module_sizes",
-  power_sens     = "S5_Fig_WGCNA_power_sensitivity")
+  power_sens     = "S3_Fig_WGCNA_power_sensitivity",
+  dendrogram     = "S4_Fig_WGCNA_gene_dendrogram",
+  module_sizes   = "S5_Fig_WGCNA_module_sizes")
 
-# One file per table: each is written as its own single-sheet .xlsx.
+# One file per table: each is written as its own single-sheet .xlsx. Numbered by
+# order of first citation: the five power-sensitivity tables are cited first
+# (S11-S15), then module assignments, module summary and GO enrichment.
 SUPP_TABLE_NAMES <- c(
-  assignments      = "S11_Table_WGCNA_module_assignments",
-  summary          = "S12_Table_WGCNA_module_summary",
-  go               = "S13_Table_WGCNA_GO_enrichment",
-  power_summary    = "S14_Table_WGCNA_power_summary",
-  adjusted_rand    = "S15_Table_WGCNA_power_adjusted_rand",
-  jaccard          = "S16_Table_WGCNA_power_jaccard",
-  stability        = "S17_Table_WGCNA_module_stability",
-  power_assignments = "S18_Table_WGCNA_power_gene_assignments")
+  power_summary     = "S11_Table_WGCNA_power_summary",
+  adjusted_rand     = "S12_Table_WGCNA_power_adjusted_rand",
+  jaccard           = "S13_Table_WGCNA_power_jaccard",
+  stability         = "S14_Table_WGCNA_module_stability",
+  power_assignments = "S15_Table_WGCNA_power_gene_assignments",
+  assignments       = "S16_Table_WGCNA_module_assignments",
+  summary           = "S17_Table_WGCNA_module_summary",
+  go                = "S18_Table_WGCNA_GO_enrichment")
 
 # =============================================================================
 # SUPPLEMENTARY FIGURES (WGCNA)
@@ -883,10 +887,6 @@ build_wgcna_soft_threshold <- function() {
       theme_bw(base_size = 11)
   }
   p1 <- base("signed_rsq", expression("signed " * R^2), "Scale-free topology fit")
-  if (exists("WGCNA_RSQ_CUTOFF")) {
-    p1 <- p1 + geom_hline(yintercept = WGCNA_RSQ_CUTOFF, linetype = "dashed",
-                           colour = "grey40")
-  }
   # Log scale: connectivity falls from ~5,500 at power 1, so on a linear axis
   # every power above ~5 hugs the baseline and reads as "almost zero" when it
   # is in fact in the tens. The chosen power's value is annotated for the same
@@ -942,6 +942,7 @@ build_wgcna_power_agreement <- function() {
 #     it keeps at the other powers. The dashed line is the network-wide mean.
 build_wgcna_module_stability <- function() {
   st <- .wgcna_table("wgcna_power_sensitivity_modules.csv")
+  st <- st[st$module != "grey", ]          # grey is the unassigned bin, not a module
   # The reference power is recorded in the module summary, not in this file.
   ref <- tryCatch({
     ms <- .wgcna_table("wgcna_module_summary.csv")
@@ -950,7 +951,6 @@ build_wgcna_module_stability <- function() {
   st$module <- factor(st$module, levels = st$module[order(st$stability)])
   ggplot(st, aes(x = module, y = stability, fill = module)) +
     geom_col(colour = "grey30", linewidth = 0.2) +
-    geom_hline(yintercept = mean(st$stability), linetype = "dashed", colour = "firebrick") +
     scale_fill_identity() +
     coord_flip() +
     labs(title = if (is.na(ref)) "Module stability across powers"
