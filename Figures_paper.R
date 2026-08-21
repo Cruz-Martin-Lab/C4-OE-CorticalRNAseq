@@ -66,6 +66,17 @@ save_figure <- function(plot, name, width = 6.5, height = 4.5) {
   invisible(plot)
 }
 
+# Base-graphics figures cannot go through ggsave(): they draw straight to a
+# device. `draw` is a zero-argument function that issues the plotting calls.
+save_base_figure <- function(draw, name, width = 9, height = 5, res = 300) {
+  pdf_path <- file.path(DIR_PAPER_FIGS, paste0(name, ".pdf"))
+  png_path <- file.path(DIR_PAPER_FIGS, paste0(name, ".png"))
+  pdf(pdf_path, width = width, height = height); draw(); dev.off()
+  png(png_path, width = width * res, height = height * res, res = res); draw(); dev.off()
+  message("  wrote ", basename(pdf_path), " + ", basename(png_path))
+  invisible(NULL)
+}
+
 # ---- Cached strand-01 results (read on demand) ------------------------------
 .load_deseq_cache <- function() {
   f <- file.path(DIR_RDATA, "02_deseq2_results.rds")
@@ -614,6 +625,173 @@ fig5d_hallmark_gsea_nes <- function(save = TRUE) {
   p
 }
 
+# --- FIGURE 6: WGCNA co-expression modules -----------------------------------
+# Reads strand 01 step 04's cached network and the module tables it writes;
+# nothing here re-runs WGCNA.
+
+DIR_WGCNA <- file.path(DIR_OUTPUT, "01_bulk_rnaseq_DE", "04_wgcna")
+
+.load_wgcna_cache <- function() {
+  f <- file.path(DIR_RDATA, "04_wgcna_results.rds")
+  if (!file.exists(f)) {
+    stop("WGCNA cache not found:\n  ", f,
+         "\nRun strand 01 step 04 first:\n",
+         "  source(\"scripts/01_bulk_rnaseq_DE/04_coexpression_wgcna.R\")", call. = FALSE)
+  }
+  readRDS(f)   # list: net, module_df, MEs, picked_power
+}
+
+.wgcna_table <- function(file) {
+  p <- file.path(DIR_WGCNA, "tables", file)
+  if (!file.exists(p)) {
+    stop("WGCNA table not found:\n  ", p,
+         "\nRun strand 01 step 04 (and 04b for the stability column).", call. = FALSE)
+  }
+  read.csv(p, check.names = FALSE)
+}
+
+# Module sizes, largest first, grey excluded.
+.wgcna_modules_by_size <- function(module_df) {
+  tb <- sort(table(module_df$module), decreasing = TRUE)
+  setdiff(names(tb), "grey")
+}
+
+# 6A. Gene clustering dendrogram with the module colour bar underneath.
+#
+#     NOTE: WGCNA::plotDendroAndColors() is base graphics and splits the device
+#     with layout(). That call does not survive being replayed into a grid
+#     viewport, so this panel CANNOT be composed with patchwork -- doing so
+#     collapses the tree and draws the colour bar over it. It is therefore a
+#     stand-alone figure, written straight to its own device, and figure6()
+#     leaves it out. Place it manually alongside the composite, or use it as a
+#     supplementary panel.
+build_wgcna_dendrogram <- function() {
+  if (!requireNamespace("WGCNA", quietly = TRUE)) {
+    stop("Package 'WGCNA' is required for the dendrogram panel.", call. = FALSE)
+  }
+  w    <- .load_wgcna_cache()
+  net  <- w$net
+  cols <- WGCNA::labels2colors(net$colors)
+  function() {
+    WGCNA::plotDendroAndColors(
+      net$dendrograms[[1]], cols[net$blockGenes[[1]]], "Module colors",
+      dendroLabels = FALSE, hang = 0.05, addGuide = TRUE, guideHang = 0.05,
+      main = "Gene clustering and module assignment")
+  }
+}
+
+# 6B. Module eigengenes across samples, largest `n_modules` modules only,
+#     annotated by genotype and sex. pheatmap draws with grid, so the gtable is
+#     wrapped for patchwork the same way.
+build_wgcna_eigengene_heatmap <- function(n_modules = 10) {
+  for (pkg in c("pheatmap", "RColorBrewer", "WGCNA")) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      stop("Package '", pkg, "' is required for the eigengene panel.", call. = FALSE)
+    }
+  }
+  .require_patchwork()
+  w    <- .load_wgcna_cache()
+  meta <- .load_deseq_cache()$metadata
+  MEs  <- WGCNA::orderMEs(w$MEs)
+  sid  <- rownames(MEs)
+
+  mat <- t(scale(MEs))
+  colnames(mat) <- meta$sample_label[match(sid, meta$sample)]
+  ann <- data.frame(
+    Genotype = factor(meta$genotype_label[match(sid, meta$sample)],
+                       levels = names(GENOTYPE_COLOURS)),
+    Sex      = meta$sex[match(sid, meta$sample)])
+  rownames(ann) <- colnames(mat)
+
+  mods <- .wgcna_modules_by_size(w$module_df)
+  keep <- paste0("ME", head(mods, n_modules))
+  keep <- keep[keep %in% rownames(mat)]
+
+  ph <- pheatmap::pheatmap(
+    mat[keep, , drop = FALSE], annotation_col = ann, silent = TRUE,
+    annotation_colors = list(Genotype = GENOTYPE_COLOURS),
+    color = colorRampPalette(rev(RColorBrewer::brewer.pal(9, "RdBu")))(100),
+    main = sprintf("Module eigengenes (z-scored)\n%d largest of %d modules (grey excluded)",
+                    length(keep), length(mods)))
+  patchwork::wrap_elements(ph$gtable)
+}
+
+# 6C. Module-theme dot plot: each displayed module's strongest GO BP terms, with
+#     a term drawn in every displayed module where it is significant -- so the
+#     panel shows how module-specific each theme is.
+#
+#     `select` picks which modules appear. "stability" uses the power-sensitivity
+#     score (04b) and is the defensible choice for the manuscript: it shows the
+#     modules that survive the parameter choice. "terms" falls back to ranking by
+#     number of significant terms when that column is absent. Modules surviving
+#     BH correction for genotype are always kept, so a small but trait-associated
+#     module is never dropped.
+build_wgcna_module_dotplot <- function(n_modules = 8, n_terms = 3,
+                                        select = c("stability", "terms"),
+                                        wrap = 42) {
+  select  <- match.arg(select)
+  go      <- .wgcna_table("GO_ORA_modules_combined.csv")
+  summ    <- .wgcna_table("wgcna_module_summary.csv")
+  if (select == "stability" && !"stability" %in% names(summ)) {
+    message("  (no stability column yet -- run 04b; ranking modules by term count instead)")
+    select <- "terms"
+  }
+
+  n_sig <- table(go$module)
+  annotated <- names(n_sig)
+  rank_by <- if (select == "stability") {
+    st <- summ$stability[match(annotated, summ$module)]
+    annotated[order(-st)]
+  } else {
+    annotated[order(-as.integer(n_sig[annotated]))]
+  }
+  always <- summ$module[!is.na(summ$padj_genotype) & summ$padj_genotype < PADJ_THRESHOLD]
+  show   <- unique(c(head(rank_by, n_modules), intersect(always, annotated)))
+  show   <- rank_by[rank_by %in% show]                  # keep the ranking order
+
+  terms <- unique(unlist(lapply(show, function(m) {
+    d <- go[go$module == m, ]
+    head(d$Description[order(d$p.adjust)], n_terms)
+  })))
+  dp <- go[go$module %in% show & go$Description %in% terms, ]
+  if (!nrow(dp)) stop("No significant GO terms for the module dot plot.", call. = FALSE)
+
+  wrap_term <- function(x) vapply(x, function(z) paste(strwrap(z, width = wrap), collapse = "\n"), "")
+  terms_w <- wrap_term(terms)
+  dp$module      <- factor(dp$module, levels = show)
+  dp$Description <- factor(wrap_term(as.character(dp$Description)), levels = rev(terms_w))
+
+  ggplot(dp, aes(x = module, y = Description, size = Count, colour = -log10(p.adjust))) +
+    geom_point() +
+    scale_colour_gradient(low = "steelblue", high = "firebrick",
+                           name = expression(-log[10] ~ "p.adjust")) +
+    scale_size_continuous(name = "Genes", range = c(1.5, 6)) +
+    labs(title = "Module GO biological process enrichment", x = NULL, y = NULL) +
+    theme_bw(base_size = 9) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          panel.grid.major = element_line(colour = "grey92"))
+}
+
+# Base graphics: returns the draw function, and saving goes through
+# save_base_figure() rather than ggsave().
+fig6a_wgcna_dendrogram <- function(save = TRUE) {
+  draw <- build_wgcna_dendrogram()
+  if (save) save_base_figure(draw, "fig6a_wgcna_dendrogram", width = 9, height = 5)
+  invisible(draw)
+}
+
+fig6b_wgcna_eigengene_heatmap <- function(save = TRUE) {
+  p <- build_wgcna_eigengene_heatmap(n_modules = 10)
+  if (save) save_figure(p, "fig6b_wgcna_eigengene_heatmap", width = 7.5, height = 5.5)
+  p
+}
+
+fig6c_wgcna_module_dotplot <- function(save = TRUE) {
+  p <- build_wgcna_module_dotplot(n_modules = 8, n_terms = 3)
+  if (save) save_figure(p, "fig6c_wgcna_module_dotplot", width = 8, height = 9)
+  p
+}
+
 # =============================================================================
 # ASSEMBLED FIGURES
 # =============================================================================
@@ -687,6 +865,19 @@ figure4 <- function() {
   save_figure(p, "figure4_synaptic_split", width = 15, height = 11)
 }
 
+# --- Figure 6: WGCNA co-expression modules -----------------------------------
+# A the module eigengenes, B the module-theme dot plot. The dot plot carries the
+# argument -- each theme occupies its own module -- so it gets the larger share.
+# The dendrogram (fig6a) is base graphics and cannot be composed here; it stays
+# a stand-alone file to place manually or use as supplementary.
+figure6 <- function() {
+  panels <- list(
+    fig6b_wgcna_eigengene_heatmap(save = FALSE), # -> A
+    fig6c_wgcna_module_dotplot(save = FALSE))    # -> B
+  p <- .assemble(panels, design = "A\nB", heights = c(0.75, 1.6))
+  save_figure(p, "figure6_wgcna_modules", width = 9, height = 14)
+}
+
 # --- Figure 5: vascular, adhesion, and rank-based findings --------------------
 # A vascular processes and B molecular functions on top; C the up-regulated
 # canonical pathways and D the Hallmark sets below.
@@ -729,10 +920,16 @@ PAPER_FIGURES <- list(
   fig5c_canonical_gsea_nes = fig5c_canonical_gsea_nes,
   fig5d_hallmark_gsea_nes  = fig5d_hallmark_gsea_nes,
 
+  # Figure 6 -- WGCNA co-expression modules
+  fig6a_wgcna_dendrogram        = fig6a_wgcna_dendrogram,
+  fig6b_wgcna_eigengene_heatmap = fig6b_wgcna_eigengene_heatmap,
+  fig6c_wgcna_module_dotplot    = fig6c_wgcna_module_dotplot,
+
   # Assembled, panel-labelled figures (the manuscript-ready pages)
   figure3 = figure3,
   figure4 = figure4,
-  figure5 = figure5
+  figure5 = figure5,
+  figure6 = figure6
 )
 
 if (!exists("FIGURES_TO_MAKE")) FIGURES_TO_MAKE <- "all"
