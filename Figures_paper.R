@@ -803,24 +803,29 @@ build_wgcna_module_dotplot <- function(n_modules = 8, n_terms = 2,
       panel.grid.major = element_line(colour = "grey92"))
 }
 
+# S3 Fig in the manuscript -- supplementary, not a Figure 6 panel.
 # Base graphics: returns the draw function, and saving goes through
 # save_base_figure() rather than ggsave().
-fig6a_wgcna_dendrogram <- function(save = TRUE) {
+figs3_gene_dendrogram <- function(save = TRUE) {
   draw <- build_wgcna_dendrogram()
   if (save) save_base_figure(draw, SUPP_FIG_NAMES[["dendrogram"]],
                               width = 9, height = 5, dir = DIR_SUPP)
   invisible(draw)
 }
 
-fig6b_wgcna_eigengene_heatmap <- function(save = TRUE) {
-  p <- build_wgcna_eigengene_heatmap(n_modules = 10)
-  if (save) save_figure(p, "fig6b_wgcna_eigengene_heatmap", width = 7.5, height = 5.5)
+# Fig 6A in the manuscript. Shows EVERY module (n_modules = NULL) rather than
+# the largest few, so the panel needs no accompanying "full set" supplement.
+fig6a_module_eigengenes <- function(save = TRUE) {
+  p <- build_wgcna_eigengene_heatmap(n_modules = NULL, cell_width = 30,
+                                      cell_height = 15, fontsize = 10)
+  if (save) save_figure(p, MAIN_FIG_NAMES[["eigengenes"]], width = 8, height = 8.5)
   p
 }
 
-fig6c_wgcna_module_dotplot <- function(save = TRUE) {
+# Fig 6B in the manuscript -- the panel that carries the argument.
+fig6b_module_theme_dotplot <- function(save = TRUE) {
   p <- build_wgcna_module_dotplot(n_modules = 8, n_terms = 2)
-  if (save) save_figure(p, "fig6c_wgcna_module_dotplot", width = 8, height = 6.5)
+  if (save) save_figure(p, MAIN_FIG_NAMES[["dotplot"]], width = 8, height = 6.5)
   p
 }
 
@@ -832,12 +837,16 @@ fig6c_wgcna_module_dotplot <- function(save = TRUE) {
 # there. Renumbering is a one-block edit -- nothing else refers to the numbers.
 DIR_SUPP <- file.path(DIR_PAPER_FIGS, "supplementary")
 
+MAIN_FIG_NAMES <- c(
+  eigengenes = "Fig6A_WGCNA_module_eigengenes",
+  dotplot    = "Fig6B_WGCNA_module_theme_dotplot",
+  composite  = "Fig6_WGCNA_modules")
+
 SUPP_FIG_NAMES <- c(
   soft_threshold = "S2_Fig_WGCNA_soft_threshold",
   dendrogram     = "S3_Fig_WGCNA_gene_dendrogram",
   module_sizes   = "S4_Fig_WGCNA_module_sizes",
-  eigengenes_all = "S5_Fig_WGCNA_module_eigengenes",
-  power_sens     = "S6_Fig_WGCNA_power_sensitivity")
+  power_sens     = "S5_Fig_WGCNA_power_sensitivity")
 
 # One file per table: each is written as its own single-sheet .xlsx.
 SUPP_TABLE_NAMES <- c(
@@ -961,14 +970,6 @@ figs2_wgcna_module_sizes <- function(save = TRUE) {
   p <- build_wgcna_module_sizes()
   if (save) save_figure(p, SUPP_FIG_NAMES[["module_sizes"]],
                          width = 8, height = 4.5, dir = DIR_SUPP)
-  p
-}
-
-figs3_wgcna_eigengene_all <- function(save = TRUE) {
-  p <- build_wgcna_eigengene_heatmap(n_modules = NULL, cell_width = 26,
-                                      cell_height = 16, fontsize = 9, tree_height = 28)
-  if (save) save_figure(p, SUPP_FIG_NAMES[["eigengenes_all"]],
-                         width = 8, height = 8, dir = DIR_SUPP)
   p
 }
 
@@ -1116,12 +1117,12 @@ figure4 <- function() {
 # here; it stays a stand-alone file, used as a supplementary figure.
 figure6 <- function() {
   panels <- list(
-    build_wgcna_eigengene_heatmap(n_modules = 10, cell_width = 30,
-                                   cell_height = 30, fontsize = 11),        # -> A
+    build_wgcna_eigengene_heatmap(n_modules = NULL, cell_width = 30,
+                                   cell_height = 13, fontsize = 10),        # -> Fig 6A
     build_wgcna_module_dotplot(n_modules = 8, n_terms = 2,
-                                legend_position = "bottom"))                # -> B
+                                legend_position = "bottom"))                # -> Fig 6B
   p <- .assemble(panels, design = "AB", widths = c(1, 1))
-  save_figure(p, "figure6_wgcna_modules", width = 17, height = 8)
+  save_figure(p, MAIN_FIG_NAMES[["composite"]], width = 17, height = 8)
 }
 
 # --- Figure 5: vascular, adhesion, and rank-based findings --------------------
@@ -1166,18 +1167,17 @@ PAPER_FIGURES <- list(
   fig5c_canonical_gsea_nes = fig5c_canonical_gsea_nes,
   fig5d_hallmark_gsea_nes  = fig5d_hallmark_gsea_nes,
 
-  # Figure 6 -- WGCNA co-expression modules
-  fig6a_wgcna_dendrogram        = fig6a_wgcna_dendrogram,
-  fig6b_wgcna_eigengene_heatmap = fig6b_wgcna_eigengene_heatmap,
-  fig6c_wgcna_module_dotplot    = fig6c_wgcna_module_dotplot,
+  # Figure 6 -- WGCNA co-expression modules (main text)
+  fig6a_module_eigengenes    = fig6a_module_eigengenes,
+  fig6b_module_theme_dotplot = fig6b_module_theme_dotplot,
 
   # Supplementary -- WGCNA tables (.xlsx, manuscript numbering)
   supplementary_tables = export_wgcna_supplementary_tables,
 
   # Supplementary -- WGCNA diagnostics
+  figs3_gene_dendrogram         = figs3_gene_dendrogram,
   figs1_wgcna_soft_threshold    = figs1_wgcna_soft_threshold,
   figs2_wgcna_module_sizes      = figs2_wgcna_module_sizes,
-  figs3_wgcna_eigengene_all     = figs3_wgcna_eigengene_all,
   figs4_wgcna_power_sensitivity = figs4_wgcna_power_sensitivity,
 
   # Assembled, panel-labelled figures (the manuscript-ready pages)
