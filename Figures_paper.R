@@ -57,9 +57,10 @@ DIR_ENRICH <- file.path(DIR_OUTPUT, "01_bulk_rnaseq_DE", "03_enrichment", "table
 # edit GENOTYPE_COLOURS in scripts/01_bulk_rnaseq_DE/00_config.R.
 stopifnot(exists("GENOTYPE_COLOURS"))
 
-save_figure <- function(plot, name, width = 6.5, height = 4.5) {
-  pdf_path <- file.path(DIR_PAPER_FIGS, paste0(name, ".pdf"))
-  png_path <- file.path(DIR_PAPER_FIGS, paste0(name, ".png"))
+save_figure <- function(plot, name, width = 6.5, height = 4.5, dir = DIR_PAPER_FIGS) {
+  if (!dir.exists(dir)) dir.create(dir, recursive = TRUE)
+  pdf_path <- file.path(dir, paste0(name, ".pdf"))
+  png_path <- file.path(dir, paste0(name, ".png"))
   ggsave(pdf_path, plot, width = width, height = height)
   ggsave(png_path, plot, width = width, height = height, dpi = 300)
   message("  wrote ", basename(pdf_path), " + ", basename(png_path))
@@ -68,9 +69,11 @@ save_figure <- function(plot, name, width = 6.5, height = 4.5) {
 
 # Base-graphics figures cannot go through ggsave(): they draw straight to a
 # device. `draw` is a zero-argument function that issues the plotting calls.
-save_base_figure <- function(draw, name, width = 9, height = 5, res = 300) {
-  pdf_path <- file.path(DIR_PAPER_FIGS, paste0(name, ".pdf"))
-  png_path <- file.path(DIR_PAPER_FIGS, paste0(name, ".png"))
+save_base_figure <- function(draw, name, width = 9, height = 5, res = 300,
+                              dir = DIR_PAPER_FIGS) {
+  if (!dir.exists(dir)) dir.create(dir, recursive = TRUE)
+  pdf_path <- file.path(dir, paste0(name, ".pdf"))
+  png_path <- file.path(dir, paste0(name, ".png"))
   pdf(pdf_path, width = width, height = height); draw(); dev.off()
   png(png_path, width = width * res, height = height * res, res = res); draw(); dev.off()
   message("  wrote ", basename(pdf_path), " + ", basename(png_path))
@@ -683,7 +686,17 @@ build_wgcna_dendrogram <- function() {
 # 6B. Module eigengenes across samples, largest `n_modules` modules only,
 #     annotated by genotype and sex. pheatmap draws with grid, so the gtable is
 #     wrapped for patchwork the same way.
-build_wgcna_eigengene_heatmap <- function(n_modules = 10) {
+# `cell_width` / `cell_height` / `fontsize` matter for composition: pheatmap
+# draws cells in ABSOLUTE units, so this panel has a fixed size that patchwork
+# cannot stretch OR shrink. In a composite, patchwork satisfies that fixed
+# demand first and gives whatever is left to the other panel, which means the
+# `widths` argument of .assemble() has no effect on the split. To rebalance
+# figure6, change these numbers -- not the widths. Too large and the panel
+# overflows its column and is clipped; `tree_height` trims the dendrograms,
+# which are the first thing to get cut on the left.
+build_wgcna_eigengene_heatmap <- function(n_modules = 10, cell_width = 34,
+                                           cell_height = 30, fontsize = 11,
+                                           tree_height = 32) {
   for (pkg in c("pheatmap", "RColorBrewer", "WGCNA")) {
     if (!requireNamespace(pkg, quietly = TRUE)) {
       stop("Package '", pkg, "' is required for the eigengene panel.", call. = FALSE)
@@ -704,15 +717,20 @@ build_wgcna_eigengene_heatmap <- function(n_modules = 10) {
   rownames(ann) <- colnames(mat)
 
   mods <- .wgcna_modules_by_size(w$module_df)
-  keep <- paste0("ME", head(mods, n_modules))
+  keep <- paste0("ME", if (is.null(n_modules)) mods else head(mods, n_modules))
   keep <- keep[keep %in% rownames(mat)]
 
   ph <- pheatmap::pheatmap(
     mat[keep, , drop = FALSE], annotation_col = ann, silent = TRUE,
     annotation_colors = list(Genotype = GENOTYPE_COLOURS),
+    cellwidth = cell_width, cellheight = cell_height, fontsize = fontsize,
+    treeheight_row = tree_height, treeheight_col = tree_height,
     color = colorRampPalette(rev(RColorBrewer::brewer.pal(9, "RdBu")))(100),
-    main = sprintf("Module eigengenes (z-scored)\n%d largest of %d modules (grey excluded)",
-                    length(keep), length(mods)))
+    main = if (is.null(n_modules))
+      sprintf("Module eigengenes (z-scored)\nall %d modules (grey excluded)", length(keep))
+    else
+      sprintf("Module eigengenes (z-scored)\n%d largest of %d modules (grey excluded)",
+               length(keep), length(mods)))
   patchwork::wrap_elements(ph$gtable)
 }
 
@@ -726,9 +744,10 @@ build_wgcna_eigengene_heatmap <- function(n_modules = 10) {
 #     number of significant terms when that column is absent. Modules surviving
 #     BH correction for genotype are always kept, so a small but trait-associated
 #     module is never dropped.
-build_wgcna_module_dotplot <- function(n_modules = 8, n_terms = 3,
+build_wgcna_module_dotplot <- function(n_modules = 8, n_terms = 2,
                                         select = c("stability", "terms"),
-                                        wrap = 42) {
+                                        wrap = 50, base_size = 13,
+                                        legend_position = "right") {
   select  <- match.arg(select)
   go      <- .wgcna_table("GO_ORA_modules_combined.csv")
   summ    <- .wgcna_table("wgcna_module_summary.csv")
@@ -765,18 +784,31 @@ build_wgcna_module_dotplot <- function(n_modules = 8, n_terms = 3,
     geom_point() +
     scale_colour_gradient(low = "steelblue", high = "firebrick",
                            name = expression(-log[10] ~ "p.adjust")) +
-    scale_size_continuous(name = "Genes", range = c(1.5, 6)) +
+    scale_size_continuous(name = "Genes", range = c(2.5, 9)) +
     labs(title = "Module GO biological process enrichment", x = NULL, y = NULL) +
-    theme_bw(base_size = 9) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          panel.grid.major = element_line(colour = "grey92"))
+    theme_bw(base_size = base_size) +
+    theme(
+      # Term names are the point of the panel, so they are sized up even though
+      # that leaves the plotting area smaller.
+      axis.text.y = element_text(size = base_size, colour = "black"),
+      axis.text.x = element_text(size = base_size, colour = "black",
+                                  angle = 45, hjust = 1),
+      plot.title  = element_text(size = base_size + 1),
+      legend.title = element_text(size = base_size - 1),
+      legend.text  = element_text(size = base_size - 2),
+      # In the composite the legends move to the bottom: on the right they sit
+      # OUTSIDE this panel and eat page width that the fixed-size heatmap needs.
+      legend.position = legend_position,
+      legend.box = if (legend_position == "bottom") "horizontal" else "vertical",
+      panel.grid.major = element_line(colour = "grey92"))
 }
 
 # Base graphics: returns the draw function, and saving goes through
 # save_base_figure() rather than ggsave().
 fig6a_wgcna_dendrogram <- function(save = TRUE) {
   draw <- build_wgcna_dendrogram()
-  if (save) save_base_figure(draw, "fig6a_wgcna_dendrogram", width = 9, height = 5)
+  if (save) save_base_figure(draw, SUPP_FIG_NAMES[["dendrogram"]],
+                              width = 9, height = 5, dir = DIR_SUPP)
   invisible(draw)
 }
 
@@ -787,9 +819,221 @@ fig6b_wgcna_eigengene_heatmap <- function(save = TRUE) {
 }
 
 fig6c_wgcna_module_dotplot <- function(save = TRUE) {
-  p <- build_wgcna_module_dotplot(n_modules = 8, n_terms = 3)
-  if (save) save_figure(p, "fig6c_wgcna_module_dotplot", width = 8, height = 9)
+  p <- build_wgcna_module_dotplot(n_modules = 8, n_terms = 2)
+  if (save) save_figure(p, "fig6c_wgcna_module_dotplot", width = 8, height = 6.5)
   p
+}
+
+# =============================================================================
+# SUPPLEMENTARY NUMBERING
+# =============================================================================
+# Manuscript numbering for the supplementary WGCNA items. The existing
+# supplementary set ends at "S1 Fig" and "S10 Table", so these continue from
+# there. Renumbering is a one-block edit -- nothing else refers to the numbers.
+DIR_SUPP <- file.path(DIR_PAPER_FIGS, "supplementary")
+
+SUPP_FIG_NAMES <- c(
+  soft_threshold = "S2_Fig_WGCNA_soft_threshold",
+  dendrogram     = "S3_Fig_WGCNA_gene_dendrogram",
+  module_sizes   = "S4_Fig_WGCNA_module_sizes",
+  eigengenes_all = "S5_Fig_WGCNA_module_eigengenes",
+  power_sens     = "S6_Fig_WGCNA_power_sensitivity")
+
+# One file per table: each is written as its own single-sheet .xlsx.
+SUPP_TABLE_NAMES <- c(
+  assignments      = "S11_Table_WGCNA_module_assignments",
+  summary          = "S12_Table_WGCNA_module_summary",
+  go               = "S13_Table_WGCNA_GO_enrichment",
+  power_summary    = "S14_Table_WGCNA_power_summary",
+  adjusted_rand    = "S15_Table_WGCNA_power_adjusted_rand",
+  jaccard          = "S16_Table_WGCNA_power_jaccard",
+  stability        = "S17_Table_WGCNA_module_stability",
+  power_assignments = "S18_Table_WGCNA_power_gene_assignments")
+
+# =============================================================================
+# SUPPLEMENTARY FIGURES (WGCNA)
+# =============================================================================
+# The diagnostics that support Figure 6 but do not belong in it: how the
+# soft-thresholding power was chosen, how large the modules are, the full
+# eigengene matrix, and how stable the modules are across powers.
+
+# S1. Soft-threshold scan. Both panels mark the power actually used, so the
+#     figure documents the choice rather than just the scan.
+build_wgcna_soft_threshold <- function() {
+  .require_patchwork()
+  d      <- .wgcna_table("wgcna_soft_threshold_scan.csv")
+  chosen <- .load_wgcna_cache()$picked_power
+  base <- function(y, ylab, title) {
+    ggplot(d, aes(x = Power, y = .data[[y]])) +
+      geom_line(colour = "grey60") +
+      geom_point(size = 1.8, colour = "steelblue4") +
+      geom_vline(xintercept = chosen, linetype = "dotted", colour = "firebrick") +
+      annotate("text", x = chosen, y = Inf, label = paste("power", chosen),
+                vjust = 1.5, hjust = -0.1, size = 3.2, colour = "firebrick") +
+      labs(title = title, x = "Soft-thresholding power", y = ylab) +
+      theme_bw(base_size = 11)
+  }
+  p1 <- base("signed_rsq", expression("signed " * R^2), "Scale-free topology fit")
+  if (exists("WGCNA_RSQ_CUTOFF")) {
+    p1 <- p1 + geom_hline(yintercept = WGCNA_RSQ_CUTOFF, linetype = "dashed",
+                           colour = "grey40")
+  }
+  # Log scale: connectivity falls from ~5,500 at power 1, so on a linear axis
+  # every power above ~5 hugs the baseline and reads as "almost zero" when it
+  # is in fact in the tens. The chosen power's value is annotated for the same
+  # reason.
+  k_at <- d$mean.k.[d$Power == chosen]
+  p2 <- base("mean.k.", "mean connectivity (log scale)", "Mean connectivity") +
+    scale_y_log10() +
+    annotate("point", x = chosen, y = k_at, colour = "firebrick", size = 2.4) +
+    annotate("text", x = chosen, y = k_at, label = sprintf("%.0f", k_at),
+              hjust = -0.4, vjust = -0.6, size = 3.2, colour = "firebrick")
+  patchwork::wrap_plots(p1, p2, ncol = 2)
+}
+
+# S2. Module sizes, largest first. Grey is the unassigned bin, not a module.
+build_wgcna_module_sizes <- function() {
+  w  <- .load_wgcna_cache()
+  ms <- as.data.frame(table(w$module_df$module), stringsAsFactors = FALSE)
+  names(ms) <- c("module", "genes")
+  ms$module <- factor(ms$module, levels = ms$module[order(-ms$genes)])
+  ggplot(ms, aes(x = module, y = genes, fill = module)) +
+    geom_col(colour = "grey30", linewidth = 0.2) +
+    scale_fill_identity() +
+    labs(title = "Module sizes", x = NULL, y = "Genes") +
+    theme_minimal(base_size = 11) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+}
+
+# S3. Agreement between the partitions built at each soft-thresholding power
+#     (adjusted Rand index; 1 = identical, 0 = chance).
+build_wgcna_power_agreement <- function() {
+  m <- .wgcna_table("wgcna_power_sensitivity_ari.csv")
+  rn <- as.character(m[[1]]); m <- m[, -1, drop = FALSE]
+  colnames(m) <- sub("^X", "", colnames(m))
+  df <- expand.grid(row = rn, col = colnames(m), stringsAsFactors = FALSE)
+  df$ari <- as.vector(as.matrix(m))
+  df$row <- factor(df$row, levels = rn)
+  df$col <- factor(df$col, levels = colnames(m))
+  ggplot(df, aes(x = col, y = row, fill = ari)) +
+    geom_tile(colour = "white") +
+    geom_text(aes(label = sprintf("%.2f", ari),
+                   colour = ari > 0.6), size = 3.2, show.legend = FALSE) +
+    scale_colour_manual(values = c(`TRUE` = "white", `FALSE` = "black")) +
+    scale_fill_gradient(low = "white", high = "steelblue4", limits = c(0, 1),
+                         name = "ARI") +
+    labs(title = "Partition agreement between powers",
+          x = "Soft-thresholding power", y = "Soft-thresholding power") +
+    coord_fixed() +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid = element_blank())
+}
+
+# S4. Per-module stability: the mean fraction of a gene's module neighbours that
+#     it keeps at the other powers. The dashed line is the network-wide mean.
+build_wgcna_module_stability <- function() {
+  st <- .wgcna_table("wgcna_power_sensitivity_modules.csv")
+  # The reference power is recorded in the module summary, not in this file.
+  ref <- tryCatch({
+    ms <- .wgcna_table("wgcna_module_summary.csv")
+    if ("stability_ref_power" %in% names(ms)) ms$stability_ref_power[1] else NA
+  }, error = function(e) NA)
+  st$module <- factor(st$module, levels = st$module[order(st$stability)])
+  ggplot(st, aes(x = module, y = stability, fill = module)) +
+    geom_col(colour = "grey30", linewidth = 0.2) +
+    geom_hline(yintercept = mean(st$stability), linetype = "dashed", colour = "firebrick") +
+    scale_fill_identity() +
+    coord_flip() +
+    labs(title = if (is.na(ref)) "Module stability across powers"
+                  else sprintf("Module stability across powers (reference power %d)", ref),
+          x = NULL, y = "mean co-membership Jaccard") +
+    theme_bw(base_size = 11)
+}
+
+figs1_wgcna_soft_threshold <- function(save = TRUE) {
+  p <- build_wgcna_soft_threshold()
+  if (save) save_figure(p, SUPP_FIG_NAMES[["soft_threshold"]],
+                         width = 10, height = 4.2, dir = DIR_SUPP)
+  p
+}
+
+figs2_wgcna_module_sizes <- function(save = TRUE) {
+  p <- build_wgcna_module_sizes()
+  if (save) save_figure(p, SUPP_FIG_NAMES[["module_sizes"]],
+                         width = 8, height = 4.5, dir = DIR_SUPP)
+  p
+}
+
+figs3_wgcna_eigengene_all <- function(save = TRUE) {
+  p <- build_wgcna_eigengene_heatmap(n_modules = NULL, cell_width = 26,
+                                      cell_height = 16, fontsize = 9, tree_height = 28)
+  if (save) save_figure(p, SUPP_FIG_NAMES[["eigengenes_all"]],
+                         width = 8, height = 8, dir = DIR_SUPP)
+  p
+}
+
+figs4_wgcna_power_sensitivity <- function(save = TRUE) {
+  p <- .assemble(list(build_wgcna_power_agreement(), build_wgcna_module_stability()),
+                  design = "AB", widths = c(1, 1))
+  if (save) save_figure(p, SUPP_FIG_NAMES[["power_sens"]],
+                         width = 13, height = 6.5, dir = DIR_SUPP)
+  p
+}
+
+# =============================================================================
+# SUPPLEMENTARY TABLES (WGCNA)
+# =============================================================================
+# The WGCNA result tables, written as .xlsx under the manuscript's supplementary
+# numbering. Sources are the CSVs that strand 01 steps 04 and 04b produce; this
+# only renames, formats and bundles them, so nothing is recomputed.
+
+# Each supplementary table is written as its own single-sheet .xlsx, with a
+# styled header row and the header frozen. `sheet` names the worksheet.
+.write_xlsx <- function(data, name, sheet = "data") {
+  if (!requireNamespace("openxlsx", quietly = TRUE)) {
+    stop("Package 'openxlsx' is required to write the supplementary tables.\n",
+         "  install with: renv::install(\"openxlsx\")", call. = FALSE)
+  }
+  if (!dir.exists(DIR_SUPP)) dir.create(DIR_SUPP, recursive = TRUE)
+  path <- file.path(DIR_SUPP, paste0(name, ".xlsx"))
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, sheet)
+  openxlsx::writeData(wb, sheet, data, headerStyle = openxlsx::createStyle(
+    textDecoration = "bold", fgFill = "#2F5496", fontColour = "#FFFFFF",
+    halign = "left", border = "Bottom"))
+  openxlsx::freezePane(wb, sheet, firstRow = TRUE)
+  openxlsx::setColWidths(wb, sheet, cols = seq_along(data), widths = "auto")
+  openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+  message(sprintf("  wrote %s.xlsx  (%d rows x %d cols)", name, nrow(data), ncol(data)))
+  invisible(path)
+}
+
+.fix_matrix_csv <- function(d, id_name) {
+  names(d)[1] <- id_name
+  names(d)[-1] <- sub("^X", "", names(d)[-1])
+  d
+}
+
+export_wgcna_supplementary_tables <- function() {
+  message("Writing WGCNA supplementary tables to: ", DIR_SUPP)
+  n <- SUPP_TABLE_NAMES
+  .write_xlsx(.wgcna_table("wgcna_module_assignments.csv"),
+              n[["assignments"]], "module_assignments")
+  .write_xlsx(.wgcna_table("wgcna_module_summary.csv"),
+              n[["summary"]], "module_summary")
+  .write_xlsx(.wgcna_table("GO_ORA_modules_combined.csv"),
+              n[["go"]], "GO_BP_by_module")
+  .write_xlsx(.wgcna_table("wgcna_power_sensitivity_summary.csv"),
+              n[["power_summary"]], "power_summary")
+  .write_xlsx(.fix_matrix_csv(.wgcna_table("wgcna_power_sensitivity_ari.csv"), "power"),
+              n[["adjusted_rand"]], "adjusted_rand_index")
+  .write_xlsx(.fix_matrix_csv(.wgcna_table("wgcna_power_sensitivity_jaccard.csv"), "power"),
+              n[["jaccard"]], "best_match_jaccard")
+  .write_xlsx(.wgcna_table("wgcna_power_sensitivity_modules.csv"),
+              n[["stability"]], "module_stability")
+  .write_xlsx(.wgcna_table("wgcna_power_sensitivity_assignments.csv"),
+              n[["power_assignments"]], "gene_assignments_by_power")
+  invisible(NULL)
 }
 
 # =============================================================================
@@ -817,9 +1061,9 @@ fig6c_wgcna_module_dotplot <- function(save = TRUE) {
 }
 
 # Lay panels out on `design` and add the A/B/C/... tags.
-.assemble <- function(panels, design, heights = NULL, tag_size = 20) {
+.assemble <- function(panels, design, heights = NULL, widths = NULL, tag_size = 20) {
   .require_patchwork()
-  (patchwork::wrap_plots(panels, design = design, heights = heights) +
+  (patchwork::wrap_plots(panels, design = design, heights = heights, widths = widths) +
      patchwork::plot_annotation(tag_levels = "A")) &
     theme(plot.tag = element_text(size = tag_size, face = "plain", hjust = 0))
 }
@@ -866,16 +1110,18 @@ figure4 <- function() {
 }
 
 # --- Figure 6: WGCNA co-expression modules -----------------------------------
-# A the module eigengenes, B the module-theme dot plot. The dot plot carries the
-# argument -- each theme occupies its own module -- so it gets the larger share.
-# The dendrogram (fig6a) is base graphics and cannot be composed here; it stays
-# a stand-alone file to place manually or use as supplementary.
+# A the module eigengenes beside B the module-theme dot plot. The dot plot
+# carries the argument -- each theme occupies its own module -- so it gets the
+# wider column. The dendrogram (fig6a) is base graphics and cannot be composed
+# here; it stays a stand-alone file, used as a supplementary figure.
 figure6 <- function() {
   panels <- list(
-    fig6b_wgcna_eigengene_heatmap(save = FALSE), # -> A
-    fig6c_wgcna_module_dotplot(save = FALSE))    # -> B
-  p <- .assemble(panels, design = "A\nB", heights = c(0.75, 1.6))
-  save_figure(p, "figure6_wgcna_modules", width = 9, height = 14)
+    build_wgcna_eigengene_heatmap(n_modules = 10, cell_width = 30,
+                                   cell_height = 30, fontsize = 11),        # -> A
+    build_wgcna_module_dotplot(n_modules = 8, n_terms = 2,
+                                legend_position = "bottom"))                # -> B
+  p <- .assemble(panels, design = "AB", widths = c(1, 1))
+  save_figure(p, "figure6_wgcna_modules", width = 17, height = 8)
 }
 
 # --- Figure 5: vascular, adhesion, and rank-based findings --------------------
@@ -924,6 +1170,15 @@ PAPER_FIGURES <- list(
   fig6a_wgcna_dendrogram        = fig6a_wgcna_dendrogram,
   fig6b_wgcna_eigengene_heatmap = fig6b_wgcna_eigengene_heatmap,
   fig6c_wgcna_module_dotplot    = fig6c_wgcna_module_dotplot,
+
+  # Supplementary -- WGCNA tables (.xlsx, manuscript numbering)
+  supplementary_tables = export_wgcna_supplementary_tables,
+
+  # Supplementary -- WGCNA diagnostics
+  figs1_wgcna_soft_threshold    = figs1_wgcna_soft_threshold,
+  figs2_wgcna_module_sizes      = figs2_wgcna_module_sizes,
+  figs3_wgcna_eigengene_all     = figs3_wgcna_eigengene_all,
+  figs4_wgcna_power_sensitivity = figs4_wgcna_power_sensitivity,
 
   # Assembled, panel-labelled figures (the manuscript-ready pages)
   figure3 = figure3,
