@@ -30,6 +30,9 @@ scripts/
   02_cross_species_comparison/       mouse C4-OE vs human SCZ synapse proteome
   03_scRNAseq_reference_projection/  DEG projection onto an Allen single-cell reference
 run_full_analysis.R                  single entry point — runs all three strands
+Figures_paper.R                      manuscript figures and supplementary tables;
+                                     reads the cached results only, never re-runs
+                                     the analysis
 ```
 
 The full output tree is documented in
@@ -90,8 +93,10 @@ source("run_full_analysis.R")
 
 `run_full_analysis.R` validates the inputs up front, creates the output tree,
 runs the three strands in dependency order — each in its own R session — and
-writes a provenance record to `Outputs/_provenance/`. Expect roughly 30–60
-minutes, dominated by WGCNA and the GSEA permutations. To run one strand only:
+writes a provenance record to `Outputs/_provenance/`. Expect roughly 10–15
+minutes end to end (measured on an Apple-silicon laptop: strand 01 ≈ 5 min,
+strand 02 ≈ 2 min, strand 03 ≈ 4 min), dominated by WGCNA, the GSEA permutations
+and loading the single-cell reference. To run one strand only:
 
 ```r
 RUN_STRANDS <- c("01")   # "01", "02", or "03"
@@ -106,6 +111,29 @@ supplementary workbooks under `cross_species/`, and the single-cell reference
 `sc_data_C4OE_PCA.rds`. `run_full_analysis.R` checks each one and names anything
 missing before doing any work. If the single-cell reference is absent, strand 03
 is skipped and strands 01–02 still complete.
+
+**Manuscript figures.** The figures and supplementary tables that appear in the
+paper are built separately, by `Figures_paper.R` at the repo root:
+
+```r
+source("Figures_paper.R")
+```
+
+It only *reads* the results the pipeline cached, so it never re-runs the
+analysis and takes about a minute. Run it after `run_full_analysis.R`. Output
+goes to `Outputs/paper_figures/`, with supplementary items under
+`supplementary/` and the single-cell projection panels under
+`projection_panels/`. To rebuild just one figure, set `FIGURES_TO_MAKE` before
+sourcing:
+
+```r
+FIGURES_TO_MAKE <- "figure6"   # names are listed in PAPER_FIGURES at the
+source("Figures_paper.R")      # bottom of the file
+```
+
+Note that the strand-03 projection panels are the exception: they are written by
+`Projection.R` during strand 03 itself, so that they are exactly the plots the
+analysis produced rather than re-drawn versions.
 
 **Outputs.** Each strand writes to its own folder under `Outputs/` — see
 [Outputs/README.md](Outputs/README.md) for the file-by-file manifest. Barplots

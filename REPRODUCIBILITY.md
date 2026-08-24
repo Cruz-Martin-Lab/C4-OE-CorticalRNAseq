@@ -1,6 +1,6 @@
 # Reproducing this analysis
 
-Everything here runs from one entry point:
+The analysis runs from one entry point:
 
 ```r
 source("run_full_analysis.R")
@@ -9,6 +9,17 @@ source("run_full_analysis.R")
 That creates the output tree, checks the inputs, and runs all three strands in
 dependency order. It restores your working directory when it finishes, and
 writes a provenance record to `Outputs/_provenance/`.
+
+The manuscript figures are built separately, afterwards:
+
+```r
+source("Figures_paper.R")
+```
+
+`Figures_paper.R` only *reads* the caches and result tables the pipeline wrote,
+so it never re-runs any analysis and cannot change a number. Keeping it out of
+`run_full_analysis.R` is deliberate: figure formatting is iterated far more
+often than the analysis, and a figure edit should never require a re-run.
 
 ---
 
@@ -30,9 +41,15 @@ source("scripts/00_setup/check_environment.R")
 
 # 3. obtain the input data (section 3 below), then
 source("run_full_analysis.R")
+
+# 4. build the manuscript figures and supplementary tables
+source("Figures_paper.R")
 ```
 
-Expect roughly 30–60 minutes, dominated by WGCNA and the GSEA permutations.
+Expect roughly 10–15 minutes for the analysis (measured on an Apple-silicon
+laptop: strand 01 ~5 min, strand 02 ~2 min, strand 03 ~4 min), dominated by
+WGCNA, the GSEA permutations and loading the single-cell reference.
+`Figures_paper.R` adds about a minute.
 
 To run one strand at a time:
 
@@ -55,6 +72,10 @@ scripts/
   02_cross_species_comparison/       mouse C4-OE vs human SCZ synapse proteome
   03_scRNAseq_reference_projection/  DEG projection onto an Allen sc reference
 
+run_full_analysis.R                  runs the three strands
+Figures_paper.R                      manuscript figures + supplementary tables,
+                                     from cached results only
+
 Outputs/
   01_bulk_rnaseq_DE/
     01_qc/{tables,figures}
@@ -68,12 +89,28 @@ Outputs/
     reference/                       frozen Ensembl ortholog table
     results/{tables,figures,logs}
   03_scRNAseq_reference_projection/{tables,figures}
+  paper_figures/                     Figures_paper.R
+    supplementary/                   supplementary figures and .xlsx tables
+    projection_panels/               strand-03 panels, written by Projection.R
   _provenance/                       sessionInfo, timings, output manifests
 ```
 
 `Outputs/` is git-ignored: it is fully regenerable, and tracking it invites the
 results on disk to drift from the code that made them. If you want the final
 supplementary tables in version control, un-ignore those specific files.
+
+**Figure code is separate from analysis code.** `Figures_paper.R` registers each
+figure in `PAPER_FIGURES` at the bottom of the file; set `FIGURES_TO_MAKE` before
+sourcing to rebuild a subset:
+
+```r
+FIGURES_TO_MAKE <- "figure6"
+source("Figures_paper.R")
+```
+
+The one exception is the strand-03 projection panels, which are written by
+`Projection.R` during the run itself rather than re-drawn afterwards, so that
+they are exactly the plots the analysis produced.
 
 **Strand 02 is run by pointing the working directory at its output folder.**
 Its 15 scripts use paths relative to the working directory, so this routes
@@ -101,8 +138,9 @@ before it in the session. `ISOLATE_STRANDS <- FALSE` disables it for debugging.
 
 ## 3. Input data
 
-Four groups of files are needed. None are in the repository — they are either
-too large for git or belong to another publication.
+Four groups of files are needed. Only `raw_counts.csv` is in the repository; the
+rest are not, being either too large for git or the property of another
+publication.
 
 | File | Goes in | Source |
 |---|---|---|
@@ -176,10 +214,38 @@ than reading the `.gmt` files. Its gene sets come from the installed package
 version, which `renv.lock` pins — but note that strands 01 and 02 therefore
 draw gene sets from two different sources. Worth unifying.
 
-**WGCNA on n = 8.** `WGCNA_POWER <- 18` is fixed rather than auto-selected,
-because signed R² never reaches 0.9 on 8 samples (it plateaus near 0.86). This
-follows Langfelder & Horvath's sample-size guidance. No module survives BH
-correction; module–trait correlations are descriptive only.
+**WGCNA on n = 8, and how the power was chosen.** `WGCNA_POWER <- 15` is fixed
+rather than auto-selected, because on 8 samples no criterion-based choice
+exists: signed R² never reaches the conventional 0.90 threshold at any power
+from 1 to 20, peaking at 0.875 (power 20). Powers 13–20 all clear 0.80, so that
+criterion alone does not discriminate between them either. Power 15 was chosen
+as the most *representative* partition of that range — across powers 12–18 it
+has the highest mean adjusted Rand index against the other powers (0.356, versus
+0.289–0.339 for the rest), and it clears R² = 0.80 with margin (0.833). It
+yields 25 modules with 203 of 15,729 genes unassigned.
+
+`WGCNA_MIN_MODULE_SIZE` is likewise fixed, at 200 rather than WGCNA's default
+of 30, so that modules are large enough to support GO annotation at this sample
+size.
+
+**Two WGCNA modules survive BH correction**, both strongly correlated with
+genotype: `blue` (1,819 genes, r = +0.993, padj = 2.5e-05) and `turquoise`
+(2,234 genes, r = −0.985, padj = 1.1e-04). These two are themselves mutually
+correlated and represent a single dominant axis of variation, not two
+independent findings.
+
+**Module membership is not stable across powers, even though the themes are.**
+The median adjusted Rand index between any two powers in 12–18 is 0.31, and the
+gene-level (size-weighted) mean module stability is 0.243. In practice the
+biological *themes* reproduce across powers while individual gene-to-module
+assignments do not, so module-level claims are safe and gene-level ones are not.
+In particular, **C4b's module assignment is not reproducible**: across powers
+12–18 it lands in `blue` four times, `turquoise` twice and `pink` once, with a
+gene-level stability of 0.38. No claim should rest on which module C4b falls
+into. Its assignments at each power are in
+`wgcna_power_sensitivity_assignments.csv`. `04b_wgcna_power_sensitivity.R`
+regenerates all of these diagnostics; it is deliberately excluded from
+`run_all.R` because it rebuilds one TOM per power (~30 min).
 
 **Sex is confounded with genotype by design.** All four C4-OE animals are male;
 Control is 2F/2M, so genotype and sex correlate at r = 0.577. The design
@@ -193,13 +259,17 @@ GSEA that identified it, and `R/09` describes those modules as "prespecified".
 They were not. Either genuinely pre-register the module list or describe the
 analysis as exploratory.
 
-**Gene-level cross-species overlap is null.** 39 observed vs 39.6 expected
-genes, enrichment 0.99, Fisher p = 0.57. The stricter sensitivity analysis
-reaches p = 0.044, but 12 of its 20 genes are discordant in direction. The
-cross-species claim rests on pathway-level convergence, not shared genes.
+**Gene-level cross-species overlap is weak, and directionally random.** The
+primary comparison (human FDR < 0.10, mouse padj < 0.05) gives 43 observed vs
+36.2 expected genes, enrichment 1.19, Fisher p = 0.13 — not significant. The
+stricter comparison (human FDR < 0.05) does reach p = 0.0023, but it is the more
+discordant of the two: 16 of its 23 genes move in opposite directions across
+species. Across the full 43-gene overlap only 19 agree in direction (44%,
+binomial p = 0.54), which is what chance would give. The cross-species claim
+rests on pathway-level convergence, not on shared genes.
 
 **Pathway-level NES correlations are anticonservative.** `R/09` and `R/12`
-Spearman-correlate human against mouse NES across ~5,000 GO:BP terms. GO terms
+Spearman-correlate human against mouse NES across 2,739 GO:BP terms. GO terms
 share large fractions of their gene membership, so those observations are
 heavily non-independent and the p value will be tiny regardless of the biology.
 Report rho descriptively; drop the p value or use a permutation null.
@@ -223,6 +293,7 @@ usually identifies the cause immediately.
 ## 7. Current status
 
 All three strands run end-to-end from `run_full_analysis.R` and complete without
-manual intervention. Strand 03 requires the single-cell reference
+manual intervention, and `Figures_paper.R` then builds the manuscript figures and
+supplementary tables from the cached results. Strand 03 requires the single-cell reference
 (`sc_data_C4OE_PCA.rds`); when it is absent, `run_full_analysis.R` skips strand 03
 with an explanation and strands 01–02 still complete.

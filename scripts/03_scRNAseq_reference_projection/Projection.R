@@ -61,6 +61,37 @@ dir_tables  <- file.path(strand_out, "tables")
 dir.create(dir_figures, recursive = TRUE, showWarnings = FALSE)
 dir.create(dir_tables,  recursive = TRUE, showWarnings = FALSE)
 
+# Manuscript panels. These are the SAME plot objects the sections below build
+# and save as PNG; they are written again here as vector PDF (plus a PNG for
+# quick viewing) under manuscript names, so the figure can be laid out by hand
+# without re-plotting anything. Nothing is restyled or assembled.
+dir_paper_panels <- file.path(outputs_root, "paper_figures", "projection_panels")
+dir.create(dir_paper_panels, recursive = TRUE, showWarnings = FALSE)
+
+save_paper_panel <- function(plot, name, width, height) {
+  ggsave(file.path(dir_paper_panels, paste0(name, ".pdf")), plot,
+         width = width, height = height)
+  ggsave(file.path(dir_paper_panels, paste0(name, ".png")), plot,
+         width = width, height = height, dpi = 300)
+  message("  panel: ", name)
+  invisible(plot)
+}
+
+# pheatmap returns a gtable rather than a ggplot, so it needs a device rather
+# than ggsave().
+save_paper_heatmap <- function(ph, name, width = 20, height = 20) {
+  grDevices::pdf(file.path(dir_paper_panels, paste0(name, ".pdf")),
+                 width = width, height = height)
+  grid::grid.newpage(); grid::grid.draw(ph$gtable); grDevices::dev.off()
+
+  grDevices::png(file.path(dir_paper_panels, paste0(name, ".png")),
+                 width = width, height = height, units = "in", res = 300)
+  grid::grid.newpage(); grid::grid.draw(ph$gtable); grDevices::dev.off()
+
+  message("  panel: ", name)
+  invisible(ph)
+}
+
 sc_reference_path <- file.path(input_dir, "sc_data_C4OE_PCA.rds")
 mouse_deg_path <- file.path(
   outputs_root, "01_bulk_rnaseq_DE", "02_differential_expression",
@@ -626,6 +657,9 @@ ggsave(
   dpi = 300
 )
 
+# PC1/PC2 are reassigned for the other direction further down; keep this one.
+Down_PC1_panel <- PC1
+
 pc2_percent <- make_pc_coordinate_bins(
   seurat_obj = sc_data_Downregulated,
   reduction_name = "pca_Downregulated_deg",
@@ -669,6 +703,8 @@ ggsave(
   height = 6,
   dpi = 300
 )
+
+Down_PC2_panel <- PC2
 # -----------------------------------------------------------------------------
 # 12. Downregulated correlation heatmap
 # -----------------------------------------------------------------------------
@@ -986,6 +1022,9 @@ ggsave(
   dpi = 300
 )
 
+# PC1/PC2 are reassigned for the other direction further down; keep this one.
+Up_PC1_panel <- PC1
+
 pc2_percent <- make_pc_coordinate_bins(
   seurat_obj = sc_data_Upregulated,
   reduction_name = "pca_Upregulated_deg",
@@ -1029,6 +1068,8 @@ ggsave(
   height = 6,
   dpi = 300
 )
+
+Up_PC2_panel <- PC2
 # -----------------------------------------------------------------------------
 # 16. Upregulated correlation heatmap
 # -----------------------------------------------------------------------------
@@ -1164,6 +1205,42 @@ p_Up<-pheatmap(
   width = 20,
   height = 20
 )
+# =============================================================================
+# MANUSCRIPT PANELS
+# =============================================================================
+# Every panel below is one of the plot objects built earlier in this script,
+# written again as PDF + PNG under a manuscript name. The figure is assembled by
+# hand from these files, so nothing here restyles, rescales or combines panels:
+# what you get is exactly what the sections above plotted.
+
+message("Writing manuscript panels to: ", dir_paper_panels)
+
+# --- Figure 8: DEG projections onto the reference ---------------------------
+# (C and D are each ONE manuscript panel built from two files, one per direction)
+save_paper_panel(Downregulated_pca_plot,
+                 "Fig8_A_projection_PCA_downregulated", 7, 5)
+save_paper_panel(Upregulated_pca_plot,
+                 "Fig8_B_projection_PCA_upregulated", 7, 5)
+
+save_paper_panel(Down_PC1_panel, "Fig8_C_PC1_composition_downregulated", 8, 6)
+save_paper_panel(Up_PC1_panel,   "Fig8_C_PC1_composition_upregulated",   8, 6)
+save_paper_panel(Down_PC2_panel, "Fig8_D_PC2_composition_downregulated", 10, 6)
+save_paper_panel(Up_PC2_panel,   "Fig8_D_PC2_composition_upregulated",   10, 6)
+
+save_paper_heatmap(p_down, "Fig9_A_correlation_heatmap_downregulated")
+save_paper_heatmap(p_Up,   "Fig9_B_correlation_heatmap_upregulated")
+
+# --- Figure 9: gene-gene correlation heatmaps -------------------------------
+
+# --- S1 Fig: the reference itself --------------------------------------------
+save_paper_panel(pca_reference_plot,   "S1_Fig_A_reference_PCA",  8, 7)
+save_paper_panel(tsne_reference_plot,  "S1_Fig_B_reference_tSNE", 8, 7)
+save_paper_panel(umap_reference_plot,  "S1_Fig_C_reference_UMAP", 8, 7)
+save_paper_panel(broad_marker_dotplot, "S1_Fig_D_broad_marker_dotplot", 10, 7)
+save_paper_panel(layer_marker_dotplot, "S1_Fig_E_layer_marker_dotplot", 8, 7)
+save_paper_panel(elbow_plot,           "S1_Fig_F_elbow_plot", 6, 5)
+
+
 # =============================================================================
 # FINAL SUMMARY
 # =============================================================================

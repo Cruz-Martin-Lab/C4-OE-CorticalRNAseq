@@ -861,7 +861,16 @@ SUPP_TABLE_NAMES <- c(
   power_assignments = "S15_Table_WGCNA_power_gene_assignments",
   assignments       = "S16_Table_WGCNA_module_assignments",
   summary           = "S17_Table_WGCNA_module_summary",
-  go                = "S18_Table_WGCNA_GO_enrichment")
+  go                = "S18_Table_WGCNA_GO_enrichment",
+  # Strand 03. Manuscript numbering: the projection gene lists and the heatmap
+  # domain assignments are four separate tables, one per direction.
+  projection_genes_down   = "S22_Table_C4-OE-downregulated_DEG_reference-projection_genes",
+  projection_genes_up     = "S23_Table_C4-OE-upregulated_DEG_reference-projection_genes",
+  projection_domains_down = "S24_Table_C4-OE-downregulated_heatmap_correlation_domain_assignments",
+  projection_domains_up   = "S25_Table_C4-OE-upregulated_heatmap_correlation_domain_assignments",
+  # Not a manuscript table: a working aid recording where the module labels used
+  # on the earlier version of the figure now fall.
+  projection_module_labels = "WORKING_projection_module_label_mapping")
 
 # =============================================================================
 # SUPPLEMENTARY FIGURES (WGCNA)
@@ -1139,6 +1148,138 @@ figure5 <- function() {
 }
 
 # =============================================================================
+# STRAND 03 -- SINGLE-CELL REFERENCE PROJECTION
+# =============================================================================
+# The Figure 7 / S6 Fig PANELS are NOT built here. They are written by
+# scripts/03_scRNAseq_reference_projection/Projection.R, which saves each of its
+# own plot objects as PDF + PNG under manuscript names:
+#
+#   Outputs/paper_figures/projection_panels/
+#
+# Drawing them there rather than re-plotting them here keeps the panels exactly
+# as the analysis script renders them, and the figure is assembled by hand from
+# those files. Re-run strand 03 to refresh them (~4 min).
+#
+# What remains here is the module bookkeeping below, which is tables rather than
+# plots and belongs with the other supplementary tables.
+
+DIR_PROJ <- file.path(DIR_OUTPUT, "03_scRNAseq_reference_projection")
+
+PROJ_DIRECTIONS <- c("Downregulated", "Upregulated")
+
+.proj_modules <- function(direction) {
+  f <- file.path(DIR_PROJ, "tables", paste0(direction, "_gene_modules.csv"))
+  if (!file.exists(f)) stop("Module table not found:\n  ", f, call. = FALSE)
+  read.csv(f, stringsAsFactors = FALSE)
+}
+
+# The genes each projection was actually built from, with their DESeq2
+# statistics. Projection.R writes these with the gene symbol as the row name.
+.proj_genes <- function(direction) {
+  f <- file.path(DIR_PROJ, "tables", paste0(direction, "_control_DEGs.csv"))
+  if (!file.exists(f)) stop("Projection gene list not found:\n  ", f, call. = FALSE)
+  d <- read.csv(f, row.names = 1, stringsAsFactors = FALSE, check.names = FALSE)
+  data.frame(Gene = rownames(d), d, row.names = NULL, check.names = FALSE)
+}
+
+
+# =============================================================================
+# MODULE ANNOTATION -- CARRYING THE LABELS ACROSS A RE-RUN
+# =============================================================================
+# The panel E/F module labels on the earlier version of this figure (M1
+# "Lipid-metabolic stress", M3 "Immune/stress-response", and so on) are
+# biological readings of specific module NUMBERS. dynamicTreeCut numbers modules
+# by size, so a re-run can renumber them even when the same genes cluster
+# together -- copying the old labels onto the new numbers would silently
+# mislabel the figure.
+#
+# This writes, for each gene that was quoted as evidence for a label, the module
+# it lands in NOW. Read it before annotating the figure: genes quoted for one
+# label should still share a module, and that module's number is the one to
+# write on the panel.
+PROJ_LEGACY_MODULE_MARKERS <- list(
+  Downregulated = list(
+    "Lipid-metabolic stress"  = c("Plin3", "Plin4", "Pnpla2", "Prodh"),
+    "Vascular-immune"         = c("Il1r1", "Ly6c2", "Klf2", "Xdh", "Fmo2"),
+    "Immune/stress-response"  = c("Disc1", "Rgs1", "Ccl4", "Socs3", "C1qc")),
+  Upregulated = list(
+    "Projection/synaptic"     = c("Foxp2", "Fezf2", "Bcl11b",
+                                  "Grik3", "Gabra5", "Grm8"),
+    "Cholesterol/lipid"       = c("Hmgcr", "Hmgcs1", "Cyp51"),
+    "Activity/trophic"        = c("Bdnf", "Homer1", "Nptx2", "Egr3",
+                                  "Rheb", "Klf10"),
+    "C4b"                     = c("C4b")))
+
+export_projection_module_tables <- function() {
+  # One single-sheet .xlsx per table, matching how the strand 01 supplementary
+  # tables are written.
+  # Two tables per direction: the genes used for the projection, and the
+  # correlation-domain (module) each gene was assigned to.
+  keys <- list(Downregulated = c(genes = "projection_genes_down",
+                                 domains = "projection_domains_down"),
+               Upregulated   = c(genes = "projection_genes_up",
+                                 domains = "projection_domains_up"))
+
+  for (direction in PROJ_DIRECTIONS) {
+    k <- keys[[direction]]
+
+    genes <- .proj_genes(direction)
+    # Ordered by effect size, which is the order the top-250 were selected in.
+    genes <- genes[order(if (direction == "Downregulated") genes$logFC
+                         else -genes$logFC), ]
+    .write_xlsx(genes, SUPP_TABLE_NAMES[[k[["genes"]]]], sheet = "genes")
+
+    mods <- .proj_modules(direction)
+    mods <- mods[order(mods$Module, mods$Gene), c("Gene", "Module")]
+    names(mods)[names(mods) == "Module"] <- "Correlation_domain"
+    .write_xlsx(mods, SUPP_TABLE_NAMES[[k[["domains"]]]], sheet = "domains")
+  }
+
+  # Where the previously quoted marker genes now sit.
+  rows <- list()
+  for (direction in names(PROJ_LEGACY_MODULE_MARKERS)) {
+    lookup <- with(.proj_modules(direction), setNames(Module, Gene))
+    for (lab in names(PROJ_LEGACY_MODULE_MARKERS[[direction]])) {
+      for (g in PROJ_LEGACY_MODULE_MARKERS[[direction]][[lab]]) {
+        present <- g %in% names(lookup)
+        rows[[length(rows) + 1]] <- data.frame(
+          direction = direction, previous_label = lab, gene = g,
+          in_this_analysis = present,
+          module_now = if (present) as.character(lookup[[g]]) else NA_character_,
+          stringsAsFactors = FALSE)
+      }
+    }
+  }
+  map <- do.call(rbind, rows)
+
+  # A label is safe to reuse only if the genes quoted for it still agree on one
+  # module. Where they do, dominant_module is the number to put on the panel.
+  agree <- do.call(rbind, lapply(
+    split(map, list(map$direction, map$previous_label), drop = TRUE),
+    function(d) {
+      present <- d[d$in_this_analysis, , drop = FALSE]
+      tab <- table(present$module_now)
+      data.frame(
+        direction = d$direction[1], previous_label = d$previous_label[1],
+        genes_quoted = nrow(d), genes_present = nrow(present),
+        modules_spanned = length(tab),
+        dominant_module = if (length(tab)) names(tab)[which.max(tab)] else NA_character_,
+        genes_in_dominant = if (length(tab)) as.integer(max(tab)) else 0L,
+        label_still_coherent = length(tab) == 1L && nrow(present) > 1L,
+        stringsAsFactors = FALSE)
+    }))
+  agree <- agree[order(agree$direction, agree$previous_label), ]
+
+  .write_xlsx(map,   SUPP_TABLE_NAMES[["projection_module_labels"]], sheet = "per_gene")
+  .write_xlsx(agree, paste0(SUPP_TABLE_NAMES[["projection_module_labels"]], "_summary"),
+              sheet = "per_label")
+
+  message("  projection module tables written to ", DIR_SUPP)
+  invisible(list(map = map, agree = agree))
+}
+
+
+# =============================================================================
 # REGISTRY + DISPATCH
 # =============================================================================
 # name -> a zero-argument thunk that builds and saves the figure. Add new
@@ -1179,6 +1320,9 @@ PAPER_FIGURES <- list(
   figs1_wgcna_soft_threshold    = figs1_wgcna_soft_threshold,
   figs2_wgcna_module_sizes      = figs2_wgcna_module_sizes,
   figs4_wgcna_power_sensitivity = figs4_wgcna_power_sensitivity,
+
+  # Strand 03 -- module tables only; the panels come from Projection.R
+  projection_module_tables = export_projection_module_tables,
 
   # Assembled, panel-labelled figures (the manuscript-ready pages)
   figure3 = figure3,
