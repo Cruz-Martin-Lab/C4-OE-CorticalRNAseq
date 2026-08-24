@@ -144,3 +144,9 @@ For full reproducibility details — what is pinned (package versions via
 `renv.lock`, the Ensembl release, the frozen ortholog table, random seeds) and
 how to verify a run — see [REPRODUCIBILITY.md](REPRODUCIBILITY.md).
 
+## Acknowledgements
+
+[Sonia Bolshakova](https://github.com/sonjbo) and
+[Yaseer Sabir](https://github.com/sabir-yas) collaborated on writing code during
+the development of this analysis. The pipeline in its current form was
+implemented, tested and documented by Marta Sánchez-Carbonell.
