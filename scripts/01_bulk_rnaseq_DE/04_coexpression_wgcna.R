@@ -249,7 +249,7 @@ message(sprintf("  -> eigengene heatmap: %d of %d modules shown (grey excluded)"
 #
 # IMPORTANT POWER CAVEAT: with 8 samples, each correlation is estimated from
 # 8 points. |r| must exceed ~0.71 for a nominal p < 0.05, and with dozens of
-# modules tested the FDR correction is severe. Treat these as descriptive /
+# modules tested the FDR correction is severe. We treat these as descriptive /
 # hypothesis-generating, not as confirmatory statistics.
 trait_df <- data.frame(
   genotype = as.numeric(metadata[sample_ids, "genotype"] == GENOTYPE_LEVELS[2]),

@@ -96,8 +96,7 @@ Outputs/
 ```
 
 `Outputs/` is git-ignored: it is fully regenerable, and tracking it invites the
-results on disk to drift from the code that made them. If you want the final
-supplementary tables in version control, un-ignore those specific files.
+results on disk to drift from the code that made them.
 
 **Figure code is separate from analysis code.** `Figures_paper.R` registers each
 figure in `PAPER_FIGURES` at the bottom of the file; set `FIGURES_TO_MAKE` before
@@ -212,7 +211,7 @@ and therefore every enrichment result.
 **`msigdbr` is called live in strand 02** (scripts 06, 07, 08, 10, 13) rather
 than reading the `.gmt` files. Its gene sets come from the installed package
 version, which `renv.lock` pins — but note that strands 01 and 02 therefore
-draw gene sets from two different sources. Worth unifying.
+draw gene sets from two different sources.
 
 **WGCNA on n = 8, and how the power was chosen.** `WGCNA_POWER <- 15` is fixed
 rather than auto-selected, because on 8 samples no criterion-based choice
@@ -234,45 +233,12 @@ genotype: `blue` (1,819 genes, r = +0.993, padj = 2.5e-05) and `turquoise`
 correlated and represent a single dominant axis of variation, not two
 independent findings.
 
-**Module membership is not stable across powers, even though the themes are.**
-The median adjusted Rand index between any two powers in 12–18 is 0.31, and the
-gene-level (size-weighted) mean module stability is 0.243. In practice the
-biological *themes* reproduce across powers while individual gene-to-module
-assignments do not, so module-level claims are safe and gene-level ones are not.
-In particular, **C4b's module assignment is not reproducible**: across powers
-12–18 it lands in `blue` four times, `turquoise` twice and `pink` once, with a
-gene-level stability of 0.38. No claim should rest on which module C4b falls
-into. Its assignments at each power are in
-`wgcna_power_sensitivity_assignments.csv`. `04b_wgcna_power_sensitivity.R`
-regenerates all of these diagnostics; it is deliberately excluded from
-`run_all.R` because it rebuilds one TOM per power (~30 min).
 
 **Sex is confounded with genotype by design.** All four C4-OE animals are male;
 Control is 2F/2M, so genotype and sex correlate at r = 0.577. The design
 `~ sex + genotype` adjusts for sex using the within-Control sex contrast, but it
 cannot fully separate a genotype effect from a male-specific one. Sex was
 *inferred* from Xist/Ddx3y counts, not recorded.
-
-**Cross-species pathway selection is post-hoc.** The RNA-localization result is
-selected in `R/08` from a hardcoded list of pathway names derived from the same
-GSEA that identified it, and `R/09` describes those modules as "prespecified".
-They were not. Either genuinely pre-register the module list or describe the
-analysis as exploratory.
-
-**Gene-level cross-species overlap is weak, and directionally random.** The
-primary comparison (human FDR < 0.10, mouse padj < 0.05) gives 43 observed vs
-36.2 expected genes, enrichment 1.19, Fisher p = 0.13 — not significant. The
-stricter comparison (human FDR < 0.05) does reach p = 0.0023, but it is the more
-discordant of the two: 16 of its 23 genes move in opposite directions across
-species. Across the full 43-gene overlap only 19 agree in direction (44%,
-binomial p = 0.54), which is what chance would give. The cross-species claim
-rests on pathway-level convergence, not on shared genes.
-
-**Pathway-level NES correlations are anticonservative.** `R/09` and `R/12`
-Spearman-correlate human against mouse NES across 2,739 GO:BP terms. GO terms
-share large fractions of their gene membership, so those observations are
-heavily non-independent and the p value will be tiny regardless of the biology.
-Report rho descriptively; drop the p value or use a permutation null.
 
 ---
 

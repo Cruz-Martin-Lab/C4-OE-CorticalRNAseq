@@ -75,7 +75,7 @@
 MASTER_ROOT <- .get_script_dir()
 
 # Sanity-check the root BEFORE anything creates directories. Without this, a
-# mis-resolved path (see .decode_r_path) produces a complete phantom output
+# mis-resolved path produces a complete phantom output
 # tree somewhere unexpected and the run only fails much later, confusingly.
 .expected_markers <- c("run_full_analysis.R",
                        file.path("scripts", "01_bulk_rnaseq_DE", "00_config.R"))
